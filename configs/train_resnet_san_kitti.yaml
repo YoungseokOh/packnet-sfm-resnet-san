@@ -1,0 +1,48 @@
+model:
+    name: 'SemiSupCompletionModel'
+    loss:
+        supervised_method: 'sparse-silog'
+        supervised_num_scales: 1
+        supervised_loss_weight: 1.0
+    optimizer:
+        name: 'Adam'
+        depth:
+            lr: 0.0001  # PackNet-SAN과 동일
+        pose:
+            lr: 0.0001
+    scheduler:
+        name: 'StepLR'
+        step_size: 30
+        gamma: 0.5
+    depth_net:
+        name: 'ResNetSAN01'  # 새로 만든 모델 이름
+        version: '1A'        # PackNet-SAN과 동일한 버전 형식
+        dropout: 0.5
+    params:
+        crop: 'garg'
+        min_depth: 0.0
+        max_depth: 80.0
+        scale_output: 'top-center'  # PackNet-SAN과 동일
+datasets:
+    augmentation:
+        crop_train_borders: (-352, 0, 0.5, 1216)  # PackNet-SAN과 동일
+        crop_eval_borders: (-352, 0, 0.5, 1216)   # PackNet-SAN과 동일
+    train:
+        batch_size: 1  # PackNet-SAN과 동일 (메모리 절약)
+        dataset: ['KITTI']
+        path: ['/data/datasets/KITTI_raw']
+        split: ['data_splits/eigen_zhou_files_tiny.txt']
+        input_depth_type: ['velodyne']  # LiDAR sparse depth
+        depth_type: ['groundtruth']
+        repeat: [1]
+    validation:
+        dataset: ['KITTI']
+        path: ['/data/datasets/KITTI_raw']
+        split: ['data_splits/eigen_test_files.txt']
+        input_depth_type: ['velodyne']  # LiDAR sparse depth
+        depth_type: ['groundtruth']
+checkpoint:
+    filepath: 'checkpoints/resnetsan01/'
+    save_top_k: -1
+save:
+    folder: 'outputs/resnetsan01/'
