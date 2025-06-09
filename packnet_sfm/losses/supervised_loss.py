@@ -127,43 +127,38 @@ class SupervisedLoss(LossBase):
         Parameters
         ----------
         inv_depths : list of torch.Tensor [B,1,H,W]
-            List of predicted inverse depth maps (스케일 0 ~ n-1)
+            List of predicted inverse depth maps
         gt_inv_depths : list of torch.Tensor [B,1,H,W]
-            List of ground-truth inverse depth maps (스케일 0 ~ n-1)
+            List of ground-truth inverse depth maps
 
         Returns
         -------
         loss : torch.Tensor [1]
-            Average supervised loss for all scales (항상 self.n으로 나눔)
+            Average supervised loss for all scales
         """
         num_scales = self.n
-
         if self.supervised_method.startswith('sparse'):
             total_loss = 0.0
 
+            # epsilon: 로그에서 0을 피하기 위해 사용하는 작은 값
+            # dtype에 맞게 설정 (예: float32라면 1e-6, float16이면 좀 더 크게)
+            eps = 1e-6
+
             for i in range(num_scales):
-                mask = (gt_inv_depths[i] > 0.).detach()
+                mask = (gt_inv_depths[i] > 0.).detach()  # Bool mask, shape [B,1,H,W]
 
-                if mask.sum() > 0:
-                    # contiguous()를 통해 메모리 연속성을 보장한 뒤 masked_select
-                    pred_masked = inv_depths[i].contiguous().masked_select(mask)
-                    gt_masked   = gt_inv_depths[i].contiguous().masked_select(mask)
+                # mask=False인 위치를 epsilon으로 채워 줍니다.
+                #   - inv_depths[i]도 0인 부분이 있으면 로그 NaN이므로, 동일하게 epsilon으로 처리
+                pred_filled = inv_depths[i].masked_fill(~mask, eps)
+                gt_filled   = gt_inv_depths[i].masked_fill(~mask, eps)
 
-                    loss_i = self.loss_func(pred_masked, gt_masked)
-                else:
-                    loss_i = torch.tensor(
-                        0.0,
-                        device=inv_depths[i].device,
-                        dtype=inv_depths[i].dtype,
-                        requires_grad=True
-                    )
+                # 이제 pred_filled, gt_filled는 “모두 양수(eps 이상)”이므로 로그 손실에서 NaN이 나오지 않습니다.
+                loss_i = self.loss_func(pred_filled, gt_filled)
                 total_loss += loss_i
 
-            # 원본과 동일하게 self.n으로 나누어 평균
             return total_loss / float(num_scales)
-
+        # Dense 계열 손실(e.g., mse, berhu, silog, abs_rel)인 경우는 기존 로직 그대로
         else:
-            # dense loss (예: mse, berhu, silog)인 경우
             return sum([
                 self.loss_func(inv_depths[i], gt_inv_depths[i])
                 for i in range(num_scales)
@@ -171,12 +166,34 @@ class SupervisedLoss(LossBase):
 
     def forward(self, inv_depths, gt_inv_depth,
                 return_logs=False, progress=0.0):
-        # … (기존 코드와 동일)
+        """
+        Calculates training supervised loss.
+
+        Parameters
+        ----------
+        inv_depths : list of torch.Tensor [B,1,H,W]
+            Predicted depth maps for the original image, in all scales
+        gt_inv_depth : torch.Tensor [B,1,H,W]
+            Ground-truth depth map for the original image
+        return_logs : bool
+            True if logs are saved for visualization
+        progress : float
+            Training percentage
+
+        Returns
+        -------
+        losses_and_metrics : dict
+            Output dictionary
+        """
+        # If using progressive scaling
         self.n = self.progressive_scaling(progress)
+        # Match predicted scales for ground-truth
         gt_inv_depths = match_scales(gt_inv_depth, inv_depths, self.n,
                                      mode='nearest', align_corners=None)
+        # Calculate and store supervised loss
         loss = self.calculate_loss(inv_depths, gt_inv_depths)
         self.add_metric('supervised_loss', loss)
+        # Return losses and metrics
         return {
             'loss': loss.unsqueeze(0),
             'metrics': self.metrics,

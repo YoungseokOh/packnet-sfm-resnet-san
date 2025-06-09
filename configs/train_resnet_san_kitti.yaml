@@ -31,7 +31,7 @@ datasets:
         batch_size: 1  # PackNet-SAN과 동일 (메모리 절약)
         dataset: ['KITTI']
         path: ['/data/datasets/KITTI_raw']
-        split: ['data_splits/eigen_zhou_files_tiny.txt']
+        split: ['data_splits/eigen_zhou_files.txt']
         input_depth_type: ['velodyne']  # LiDAR sparse depth
         depth_type: ['groundtruth']
         repeat: [1]

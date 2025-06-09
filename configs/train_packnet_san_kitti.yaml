@@ -1,5 +1,3 @@
-arch:
-    validate_first: True
 model:
     name: 'SemiSupCompletionModel'
     loss:
