@@ -15,6 +15,7 @@ downloads/
 outputs/
 checkpoints/
 eggs/
+onnx/
 .eggs/
 lib/
 lib64/
