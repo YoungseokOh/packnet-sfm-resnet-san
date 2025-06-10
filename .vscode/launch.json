@@ -11,6 +11,12 @@
             "program": "${file}",
             "console": "integratedTerminal",
             "args": ["configs/train_resnet_san_kitti.yaml"],
+
+            // python scripts/eval_pytorch_onnx_comparison.py     
+            // --checkpoint /workspace/packnet-sfm/checkpoints/resnetsan01/default_config-train_resnet_san_kitti-2025.06.05-09h50m24s/epoch=20_KITTI_raw-eigen_test_files-groundtruth-loss=0.000.ckpt     --onnx_model onnx/model_1216x352_reflect.onnx 
+            // --data_path /data/datasets/KITTI_raw 
+            // --split_file /data/datasets/KITTI_raw/data_splits/eigen_test_files.txt
+            // --use_gt_scale
         }
     ]
 }

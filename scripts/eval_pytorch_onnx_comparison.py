@@ -35,7 +35,7 @@ def parse_args():
                         help='Maximum depth for evaluation')
     parser.add_argument('--crop', type=str, default='garg', choices=['', 'garg'],
                         help='Crop type for evaluation')
-    parser.add_argument('--use_gt_scale', action='store_true', default=True,
+    parser.add_argument('--use_gt_scale', action='store_true',
                         help='Use ground-truth median scaling')
     parser.add_argument('--num_images', type=int, default=None,
                         help='Number of images to evaluate (None for all)')
