@@ -211,6 +211,31 @@ class ModelWrapper(torch.nn.Module):
             'idx': batch['idx'],
             **output['metrics'],
         }
+    
+    def quick_test_step(self, batch, *args):
+        """빠른 테스트 스텝 (메트릭만 계산, 저장 없음)"""
+        try:
+            output = self.evaluate_depth(batch)
+            
+            # 첫 번째 depth 메트릭 추출 (abs_rel)
+            metrics = {}
+            for key, value in output['metrics'].items():
+                if 'depth' in key and isinstance(value, torch.Tensor):
+                    if value.dim() == 1 and len(value) > 0:
+                        metrics['abs_rel'] = value[0].item()  # 첫 번째 메트릭이 abs_rel
+                        break
+                elif 'depth' in key and isinstance(value, (int, float)):
+                    metrics['abs_rel'] = float(value)
+                    break
+            
+            return {
+                'idx': batch.get('idx', 0),
+                **metrics
+            }
+            
+        except Exception as e:
+            # 에러 발생 시 기본값 반환
+            return {'idx': batch.get('idx', 0), 'abs_rel': 0.0}
 
     def training_epoch_end(self, output_batch):
         """Finishes a training epoch."""

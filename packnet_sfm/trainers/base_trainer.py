@@ -45,12 +45,19 @@ class BaseTrainer:
         if self.checkpoint:
             self.checkpoint.check_and_save(module, output)
 
-    def train_progress_bar(self, dataloader, config, ncols=120):
-        return tqdm(enumerate(dataloader, 0),
-                    unit=' images', unit_scale=self.world_size * config.batch_size,
-                    total=len(dataloader), smoothing=0,
-                    disable=not self.is_rank_0, ncols=ncols,
-                    )
+    def train_progress_bar(self, dataloader, config):
+        """Enhanced training progress bar with evaluation info"""
+        if self.is_rank_0:
+            # 🆕 enumerate를 포함한 tqdm 반환
+            return tqdm(enumerate(dataloader),
+                        total=len(dataloader),
+                        desc=f'Training',
+                        ncols=160,
+                        leave=True,
+                        dynamic_ncols=False)
+        else:
+            # 🆕 non-rank 0에서는 enumerate 반환
+            return enumerate(dataloader)
 
     def val_progress_bar(self, dataloader, config, n=0, ncols=120):
         return tqdm(enumerate(dataloader, 0),

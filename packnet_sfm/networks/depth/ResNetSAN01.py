@@ -10,36 +10,45 @@ from functools import partial
 
 class ResNetSAN01(nn.Module):
     """
-    ResNet-18 based SAN network for depth estimation with sparse depth input
+    ResNet-based SAN network for depth estimation with sparse depth input
     
     Parameters
     ----------
     dropout : float
         Dropout value to use
     version : str
-        Version string (A for concat, B for add - kept for compatibility)
+        Version string (format: {num_layers}{variant}, e.g., '18A', '34A', '50B')
     kwargs : dict
         Extra parameters
     """
     def __init__(self, dropout=None, version=None, **kwargs):
         super().__init__()
         
-        self.version = version[1:] if version else 'A'  # Extract A or B from version
+        # Parse version string
+        if version:
+            # Extract number of layers (18, 34, 50)
+            num_layers = int(''.join(filter(str.isdigit, version)))
+            # Extract variant (A or B)
+            self.variant = ''.join(filter(str.isalpha, version)) or 'A'
+        else:
+            num_layers = 18
+            self.variant = 'A'
         
-        # ResNet-18 encoder
-        self.encoder = ResnetEncoder(num_layers=18, pretrained=True)
+        print(f"🏗️  Initializing ResNetSAN01 with ResNet-{num_layers} (variant {self.variant})")
+        
+        # ResNet encoder with specified layers
+        self.encoder = ResnetEncoder(num_layers=num_layers, pretrained=True)
         
         # Standard depth decoder
         self.decoder = DepthDecoder(num_ch_enc=self.encoder.num_ch_enc)
         
         # Minkowski encoder for sparse depth processing
-        # ResNet-18 encoder channels: [64, 64, 128, 256, 512]
         self.mconvs = MinkowskiEncoder(
             self.encoder.num_ch_enc, 
             with_uncertainty=False
         )
         
-        # Learnable weights and biases for feature fusion (5 scales like PackNet)
+        # Learnable weights and biases for feature fusion (5 scales)
         self.weight = torch.nn.parameter.Parameter(
             torch.ones(5), requires_grad=True
         )

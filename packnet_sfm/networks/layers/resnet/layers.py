@@ -39,7 +39,7 @@ class ConvBlock(nn.Module):
 class Conv3x3(nn.Module):
     """Layer to pad and convolve input
     """
-    def __init__(self, in_channels, out_channels, use_refl=True):
+    def __init__(self, in_channels, out_channels, use_refl=False):
         super(Conv3x3, self).__init__()
 
         if use_refl:

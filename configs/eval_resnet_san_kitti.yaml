@@ -16,7 +16,7 @@ datasets:
         dataset: ['KITTI']
         path: ['/data/datasets/KITTI_raw']
         split: ['data_splits/eigen_test_files.txt']
-        input_depth_type: ['']  # LiDAR sparse depth
+        input_depth_type: ['velodyne']  # LiDAR sparse depth
         depth_type: ['groundtruth']
 save:
     folder: 'outputs/'

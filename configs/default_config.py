@@ -16,6 +16,15 @@ cfg.arch.seed = 42                      # Random seed for Pytorch/Numpy initiali
 cfg.arch.min_epochs = 1                 # Minimum number of epochs
 cfg.arch.max_epochs = 50                # Maximum number of epochs
 cfg.arch.validate_first = False         # Validate before training starts
+
+# 🆕 중간 평가 설정 (더 효율적인 기본값)
+cfg.arch.eval_during_training = True    # Enable evaluation during training
+cfg.arch.eval_progress_interval = 0.2   # 20%마다 평가 (10%에서 20%로 변경)
+cfg.arch.eval_subset_size = 25          # 25개 이미지만 평가 (50에서 25로 줄임)
+
+# 🆕 추가 필수 설정들
+cfg.arch.clip_grad = 10.0               # Gradient clipping value
+cfg.arch.dtype = None                   # Data type for training (None for default)
 ########################################################################################################################
 ### CHECKPOINT
 ########################################################################################################################

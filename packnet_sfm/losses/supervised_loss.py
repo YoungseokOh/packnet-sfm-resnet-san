@@ -5,6 +5,7 @@ import torch.nn as nn
 
 from packnet_sfm.utils.image import match_scales
 from packnet_sfm.losses.loss_base import LossBase, ProgressiveScaling
+from packnet_sfm.losses.ssi_loss import SSILoss
 
 ########################################################################################################################
 
@@ -21,6 +22,7 @@ class BerHuLoss(nn.Module):
         """
         super().__init__()
         self.threshold = threshold
+        
     def forward(self, pred, gt):
         """
         Calculates the BerHu loss.
@@ -80,6 +82,8 @@ def get_loss_func(supervised_method):
         return SilogLoss()
     elif supervised_method.endswith('abs_rel'):
         return lambda x, y: torch.mean(torch.abs(x - y) / x)
+    elif supervised_method.endswith('ssi'):
+        return SSILoss()
     else:
         raise ValueError('Unknown supervised loss {}'.format(supervised_method))
 
