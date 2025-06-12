@@ -543,8 +543,9 @@ def setup_dataset(config, mode, requirements, **kwargs):
 
         # KITTI dataset
         if config.dataset[i] == 'KITTI':
-            from packnet_sfm.datasets.kitti_dataset import KITTIDataset
-            dataset = KITTIDataset(
+            # from packnet_sfm.datasets.kitti_dataset import KITTIDataset
+            from packnet_sfm.datasets.kitti_dataset_optimized import OptimizedKITTIDataset
+            dataset = OptimizedKITTIDataset(
                 config.path[i], path_split,
                 **dataset_args, **dataset_args_i,
             )

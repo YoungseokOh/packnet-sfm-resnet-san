@@ -18,10 +18,10 @@ model:
         name: 'ResNetSAN01'
         version: '18A'
         dropout: 0.5
-        # 🆕 FiLM 설정 추가
-        use_film: true           # Depth-aware FiLM 활성화
-        film_scales: [0]         # 첫 번째 스케일에서만 FiLM 적용
-        # film_scales: [0, 1]    # 첫 번째, 두 번째 스케일에서 FiLM 적용 (선택사항)
+        # 🆕 Enhanced LiDAR processing settings
+        use_film: true
+        film_scales: [0, 1]  # Apply FiLM at first two scales
+        use_enhanced_lidar: true  # Enable enhanced LiDAR processing
     params:
         crop: 'garg'
         min_depth: 0.0
@@ -36,7 +36,7 @@ datasets:
         batch_size: 4
         dataset: ['KITTI']
         path: ['/data/datasets/KITTI_raw']
-        split: ['data_splits/eigen_zhou_files.txt']
+        split: ['data_splits/eigen_zhou_files_tiny.txt']
         input_depth_type: ['velodyne']
         depth_type: ['groundtruth']
         repeat: [2]
@@ -46,7 +46,6 @@ datasets:
         split: ['data_splits/eigen_test_files.txt']
         input_depth_type: ['velodyne','']
         depth_type: ['groundtruth','groundtruth']
-    # 🆕 테스트 데이터셋 추가 (중간 평가용)
     test:
         dataset: ['KITTI']
         path: ['/data/datasets/KITTI_raw']
@@ -54,7 +53,6 @@ datasets:
         input_depth_type: ['velodyne']
         depth_type: ['groundtruth']
 
-# 🆕 중간 평가 설정
 arch:
     seed: 42
     clip_grad: 10.0
@@ -64,8 +62,8 @@ arch:
     eval_subset_size: 50
 
 checkpoint:
-    filepath: 'checkpoints/resnetsan01/'
+    filepath: 'checkpoints/resnetsan01_enhanced/'
     save_top_k: -1
 
 save:
-    folder: 'outputs/resnetsan01/'
+    folder: 'outputs/resnetsan01_enhanced/'

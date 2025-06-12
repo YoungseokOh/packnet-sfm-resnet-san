@@ -36,7 +36,7 @@ datasets:
         batch_size: 4
         dataset: ['KITTI']
         path: ['/data/datasets/KITTI_raw']
-        split: ['data_splits/eigen_zhou_files.txt']
+        split: ['data_splits/eigen_zhou_files_tiny.txt']
         input_depth_type: ['velodyne']
         depth_type: ['groundtruth']
         repeat: [2]

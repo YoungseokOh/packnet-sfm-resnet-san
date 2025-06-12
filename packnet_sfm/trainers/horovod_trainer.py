@@ -158,7 +158,7 @@ class HorovodTrainer(BaseTrainer):
         eval_interval_batches = max(1, int(total_batches * self.eval_progress_interval))
         
         if self.is_rank_0:
-            print(f"🔍 Will evaluate every {eval_interval_batches} batches")
+            print(f"\n🔍 Will evaluate every {eval_interval_batches} batches")
 
         for batch_idx, batch in progress_bar:
             # 🆕 간단한 배치 기준 평가

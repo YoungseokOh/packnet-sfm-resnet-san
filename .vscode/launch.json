@@ -10,7 +10,7 @@
             "request": "launch",
             "program": "${file}",
             "console": "integratedTerminal",
-            "args": ["configs/train_resnet_san_kitti.yaml"],
+            "args": ["configs/train_resnet_san_kitti_enhanced.yaml"],
 
             // python scripts/eval_pytorch_onnx_comparison.py     
             // --checkpoint /workspace/packnet-sfm/checkpoints/resnetsan01/default_config-train_resnet_san_kitti-2025.06.05-09h50m24s/epoch=20_KITTI_raw-eigen_test_files-groundtruth-loss=0.000.ckpt     --onnx_model onnx/model_1216x352_reflect.onnx 
