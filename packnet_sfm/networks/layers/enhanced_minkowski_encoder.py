@@ -284,19 +284,14 @@ class EnhancedMinkowskiEncoder(nn.Module):
 
         # Enhanced FiLM parameter generation
         if self.rgb_channels is not None and str(current_scale) in self.film_generators:
-            try:
-                pooled_feat = F.adaptive_avg_pool2d(out, 1)
-                params = self.film_generators[str(current_scale)](pooled_feat)
-                gamma, beta = params.chunk(2, dim=1)
-                
-                # Improved FiLM application
-                gamma = gamma * 0.1 + 1.0  # Scale around 1.0
-                beta = beta * 0.1           # Small bias adjustment
-                
-                return out, gamma, beta
-            except Exception as e:
-                print(f"⚠️ FiLM generation failed: {e}")
-                # Return without FiLM
-                return out
+            pooled_feat = F.adaptive_avg_pool2d(out, 1)
+            params = self.film_generators[str(current_scale)](pooled_feat)
+            gamma, beta = params.chunk(2, dim=1)
+            
+            # 🆕 더 보수적인 FiLM 적용 (절대적 스케일 보존)
+            gamma = gamma * 0.05 + 1.0  # 더 작은 변화
+            beta = beta * 0.05           # 더 작은 bias
+            
+            return out, gamma, beta
 
         return out

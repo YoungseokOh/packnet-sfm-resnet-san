@@ -1,7 +1,8 @@
 model:
     name: 'SemiSupCompletionModel'
     loss:
-        supervised_method: 'sparse-ssi'
+        # 🆕 Enhanced SSI Loss 사용
+        supervised_method: 'sparse-enhanced-ssi'  # 또는 'sparse-progressive-ssi'
         supervised_num_scales: 1
         supervised_loss_weight: 1.0
     optimizer:
@@ -62,8 +63,8 @@ arch:
     eval_subset_size: 50
 
 checkpoint:
-    filepath: 'checkpoints/resnetsan01_enhanced/'
+    filepath: 'checkpoints/resnetsan01_enhanced_ssi/'
     save_top_k: -1
 
 save:
-    folder: 'outputs/resnetsan01_enhanced/'
+    folder: 'outputs/resnetsan01_enhanced_ssi/'
