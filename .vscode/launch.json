@@ -3,20 +3,28 @@
     // Hover to view descriptions of existing attributes.
     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
-    "configurations": [
+    "configurations": 
+    [
         {
-            "name": "Python Debugger: Current File",
-            "type": "debugpy",
+            "name": "Train from Config",
+            "type": "debugpy", 
             "request": "launch",
-            "program": "${file}",
+            "program": "${workspaceFolder}/scripts/train.py",
             "console": "integratedTerminal",
-            "args": ["configs/train_resnet_san_kitti_enhanced.yaml"],
-
+            "args": 
+            [
+                "configs/train_packnet_slim_completion_enhanced.yaml"
+            ],
+            "cwd": "${workspaceFolder}",
+            "env": 
+            {
+                "PYTHONPATH": "${workspaceFolder}"
+            }     
+        }
             // python scripts/eval_pytorch_onnx_comparison.py     
             // --checkpoint /workspace/packnet-sfm/checkpoints/resnetsan01/default_config-train_resnet_san_kitti-2025.06.05-09h50m24s/epoch=20_KITTI_raw-eigen_test_files-groundtruth-loss=0.000.ckpt     --onnx_model onnx/model_1216x352_reflect.onnx 
             // --data_path /data/datasets/KITTI_raw 
             // --split_file /data/datasets/KITTI_raw/data_splits/eigen_test_files.txt
             // --use_gt_scale
-        }
     ]
 }
