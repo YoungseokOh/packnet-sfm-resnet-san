@@ -167,8 +167,8 @@ class PackNetSlimSAN01(nn.Module):
                             )
                         
                         # Fusion with learnable weights
-                        weight_val = self.weight[i].item()
-                        bias_val = self.bias[i].item()
+                        weight_val = self.weight[i]
+                        bias_val = self.bias[i]
                         
                         fused_feat = (weight_val * modulated_feat + 
                                      (1 - weight_val) * sparse_feat + 
@@ -249,9 +249,8 @@ class PackNetSlimSAN01(nn.Module):
 
         return inv_depths, skips
 
-    def forward(self, rgb, **kwargs):
+    def forward(self, rgb, input_depth=None, **kwargs):
         """Forward pass compatible with existing PackNet interface"""
-        input_depth = kwargs.get('input_depth', None)
         
         if not self.training:
             inv_depths, _ = self.run_network(rgb, input_depth)

@@ -13,7 +13,7 @@
             "console": "integratedTerminal",
             "args": 
             [
-                "configs/train_packnet_slim_completion_enhanced.yaml"
+                "configs/train_yolov8_san_kitti_stable.yaml"
             ],
             "cwd": "${workspaceFolder}",
             "env": 

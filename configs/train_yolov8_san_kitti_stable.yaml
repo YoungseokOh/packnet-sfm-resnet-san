@@ -15,9 +15,13 @@ model:
         step_size: 30
         gamma: 0.5
     depth_net:
-        name: 'ResNetSAN01'
-        version: '18A'
-        dropout: 0.5
+        name: 'YOLOv8SAN01'
+        variant: 's'
+        dropout: 0.1
+        # 🔧 안정성 우선 - 모든 고급 기능 비활성화
+        use_film: false
+        film_scales: []
+        use_enhanced_lidar: false
     params:
         crop: 'garg'
         min_depth: 0.0
@@ -29,38 +33,31 @@ datasets:
         crop_train_borders: (-352, 0, 0.5, 1216)
         crop_eval_borders: (-352, 0, 0.5, 1216)
     train:
-        batch_size: 4
+        batch_size: 2  # 작게 시작
         dataset: ['KITTI']
         path: ['/data/datasets/KITTI_raw']
-        split: ['data_splits/eigen_zhou_files.txt']
+        split: ['data_splits/eigen_zhou_files_tiny.txt']
         input_depth_type: ['velodyne']
         depth_type: ['groundtruth']
-        repeat: [2]
+        repeat: [1]
     validation:
         dataset: ['KITTI']
         path: ['/data/datasets/KITTI_raw']
         split: ['data_splits/eigen_test_files.txt']
         input_depth_type: ['velodyne','']
         depth_type: ['groundtruth','groundtruth']
-    test:
-        dataset: ['KITTI']
-        path: ['/data/datasets/KITTI_raw']
-        split: ['data_splits/eigen_test_files.txt']
-        input_depth_type: ['velodyne']
-        depth_type: ['groundtruth']
 
-# 🆕 중간 평가 설정
 arch:
     seed: 42
     clip_grad: 10.0
-    max_epochs: 30
+    max_epochs: 10  # 🔧 1 epoch만 테스트
     eval_during_training: true
-    eval_progress_interval: 0.1
-    eval_subset_size: 50
+    eval_progress_interval: 0.5  # 중간에 한 번만
+    eval_subset_size: 10  # 작게
 
 checkpoint:
-    filepath: 'checkpoints/resnetsan01/'
+    filepath: 'checkpoints/yolov8san01_stable_test/'
     save_top_k: -1
 
 save:
-    folder: 'outputs/resnetsan01/'
+    folder: 'outputs/yolov8san01_stable_test/'
