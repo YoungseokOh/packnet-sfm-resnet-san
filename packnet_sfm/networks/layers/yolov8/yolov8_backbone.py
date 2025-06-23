@@ -91,14 +91,12 @@ class SPPF(nn.Module):
 class YOLOv8Backbone(nn.Module):
     """
     YOLOv8 Backbone for depth estimation
-    Based on YOLOv8n/s/m/l/x architectures with ImageNet pretrained weights
     """
-    
-    # YOLOv8 model configurations [depth, width, max_channels]
+    # YOLOv8 model configurations [depth_multiple, width_multiple, max_channels]
     model_configs = {
         'n': [0.33, 0.25, 1024],  # YOLOv8n
         's': [0.33, 0.50, 1024],  # YOLOv8s  
-        'm': [0.67, 0.75, 768],   # YOLOv8m
+        'm': [0.67, 0.75, 576],   # YOLOv8m  <-- pretrained weight 에 맞춘 값
         'l': [1.00, 1.00, 512],   # YOLOv8l
         'x': [1.00, 1.25, 512],   # YOLOv8x
     }
