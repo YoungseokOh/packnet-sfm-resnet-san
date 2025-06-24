@@ -4,6 +4,7 @@ import os
 import torch
 import horovod.torch as hvd
 import traceback
+import json
 from packnet_sfm.trainers.base_trainer import BaseTrainer, sample_to_cuda
 from packnet_sfm.utils.config import prep_logger_and_checkpoint
 from packnet_sfm.utils.logging import print_config
@@ -80,12 +81,15 @@ class HorovodTrainer(BaseTrainer):
         # Validate before training if requested
         if self.validate_first:
             validation_output = self.validate(val_dataloaders, module)
+            self._save_eval_results(module.current_epoch, validation_output)
             self.check_and_save(module, validation_output)
 
         # Epoch loop
         for epoch in range(module.current_epoch, self.max_epochs):
             self.train_with_eval(train_dataloader, module, optimizer)
             validation_output = self.validate(val_dataloaders, module)
+            # 🆕 평가 결과 저장
+            self._save_eval_results(epoch, validation_output)
             self.check_and_save(module, validation_output)
             module.current_epoch += 1
             scheduler.step()
@@ -340,3 +344,18 @@ class HorovodTrainer(BaseTrainer):
             all_outputs.append(outputs)
         # Return all outputs for epoch end
         return module.test_epoch_end(all_outputs)
+
+    def _save_eval_results(self, epoch: int, results: dict):
+        """중간 평가 후 checkpoint 폴더에 JSON 결과 저장"""
+        if not (self.is_rank_0 and self.checkpoint and results):
+            return
+        # 체크포인트 폴더 경로
+        ckpt_dir = getattr(self.checkpoint, 'dirpath', None)
+        if not ckpt_dir:
+            return
+        save_dir = os.path.join(ckpt_dir, 'evaluation_results')
+        os.makedirs(save_dir, exist_ok=True)
+        fname = f'epoch_{epoch}_results.json'
+        path = os.path.join(save_dir, fname)
+        with open(path, 'w') as f:
+            json.dump(results, f, indent=4)
