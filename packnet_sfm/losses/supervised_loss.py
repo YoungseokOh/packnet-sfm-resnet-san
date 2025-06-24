@@ -6,7 +6,8 @@ import torch.nn as nn
 from packnet_sfm.utils.image import match_scales
 from packnet_sfm.losses.loss_base import LossBase, ProgressiveScaling
 from packnet_sfm.losses.ssi_loss import SSILoss
-from packnet_sfm.losses.enhanced_ssi_loss import EnhancedSSILoss, ProgressiveEnhancedSSILoss
+from packnet_sfm.losses.ssi_trim_loss import SSITrimLoss
+from packnet_sfm.losses.ssi_loss_enhanced import EnhancedSSILoss, ProgressiveEnhancedSSILoss
 
 ########################################################################################################################
 
@@ -90,6 +91,8 @@ def get_loss_func(supervised_method):
         return EnhancedSSILoss()
     elif supervised_method.endswith('progressive-ssi'):
         return ProgressiveEnhancedSSILoss()
+    elif supervised_method.endswith('ssi-trim'):
+        return SSITrimLoss(trim=0.2, epsilon=1e-6)
     else:
         raise ValueError('Unknown supervised loss {}'.format(supervised_method))
 

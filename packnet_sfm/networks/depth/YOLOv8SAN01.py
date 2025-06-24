@@ -25,7 +25,7 @@ class YOLOv8SAN01(nn.Module):
         super().__init__()
         
         # 🆕 Enhanced LiDAR processing 설정
-        use_enhanced_lidar = kwargs.get('use_enhanced_lidar', True)
+        use_enhanced_lidar = kwargs.get('use_enhanced_lidar', False)
         
         print(f"🏗️  Initializing YOLOv8SAN01 with YOLOv8{variant}")
         
