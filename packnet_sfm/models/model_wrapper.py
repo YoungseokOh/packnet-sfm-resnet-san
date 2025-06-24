@@ -176,9 +176,37 @@ class ModelWrapper(torch.nn.Module):
                                 self.config.datasets.validation, 'validation')
 
     def test_dataloader(self):
-        """Prepare test dataloader."""
-        return setup_dataloader(self.test_dataset,
-                                self.config.datasets.test, 'test')
+        """
+        Test dataloader for intermediate evaluation.
+        
+        Returns
+        -------
+        dataloaders : list of DataLoader or None
+            List of created test dataloaders, or None if no test dataset
+        """
+        # 🆕 test_dataset이 None인지 안전하게 확인
+        if self.test_dataset is None:
+            print("⚠️ No test dataset configured")
+            return None
+        
+        # 🆕 test_dataset이 빈 리스트인지 확인
+        if isinstance(self.test_dataset, list) and len(self.test_dataset) == 0:
+            print("⚠️ Test dataset list is empty")
+            return None
+        
+        try:
+            dataloaders = setup_dataloader(
+                self.test_dataset, self.config.datasets.test, 'test')
+            
+            if dataloaders is None or len(dataloaders) == 0:
+                print("⚠️ Failed to create test dataloaders")
+                return None
+            
+            return dataloaders
+        
+        except Exception as e:
+            print(f"❌ Error creating test dataloader: {e}")
+            return None
 
     def training_step(self, batch, *args):
         """Processes a training batch."""

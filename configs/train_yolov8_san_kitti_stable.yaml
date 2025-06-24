@@ -1,7 +1,7 @@
 model:
     name: 'SemiSupCompletionModel'
     loss:
-        supervised_method: 'sparse-ssi-trim'
+        supervised_method: 'sparse-ssi'
         supervised_num_scales: 1
         supervised_loss_weight: 1.0
     optimizer:

@@ -28,7 +28,6 @@ class HorovodTrainer(BaseTrainer):
         self.eval_during_training = kwargs.get('eval_during_training', True)
         self.eval_progress_interval = kwargs.get('eval_progress_interval', 0.1)
         self.eval_subset_size = kwargs.get('eval_subset_size', 50)
-        self.last_eval_progress = 0.0
 
     @property
     def proc_rank(self):
@@ -40,6 +39,7 @@ class HorovodTrainer(BaseTrainer):
 
     def fit(self, module):
         # Prepare module for training
+        self.module = module
         module.trainer = self
         prep_logger_and_checkpoint(module)
         print_config(module.config)
@@ -58,17 +58,23 @@ class HorovodTrainer(BaseTrainer):
         train_dataloader = module.train_dataloader()
         val_dataloaders = module.val_dataloader()
 
-        # 테스트 데이터로더 준비 (중간 평가용)
-        if self.eval_during_training:
+        # 🆕 Validation 데이터로더를 중간 평가에도 활용
+        self.eval_dataloaders = None
+        if self.eval_during_training and val_dataloaders:
             try:
-                test_dataloaders = module.test_dataloader()
-                if test_dataloaders is not None and len(test_dataloaders) > 0:
-                    self._prepare_test_subset(test_dataloaders)
-                    if self.is_rank_0:
-                        print("✅ Test dataloader prepared for intermediate evaluation")
-                else:
-                    self.eval_during_training = False
-            except Exception:
+                # validation 데이터로더를 그대로 사용
+                # validation은 이미 RGB-only와 RGB+LiDAR 둘 다 포함
+                self.eval_dataloaders = val_dataloaders
+                if self.is_rank_0:
+                    print("✅ Using validation dataloaders for intermediate evaluation:")
+                    for i, dataloader in enumerate(val_dataloaders):
+                        dataset_config = module.config.datasets.validation
+                        input_depth_type = dataset_config.input_depth_type[i] if i < len(dataset_config.input_depth_type) else ''
+                        eval_type = "RGB+LiDAR" if input_depth_type else "RGB-only"
+                        print(f"   [{i}] {eval_type} evaluation")
+            except Exception as e:
+                if self.is_rank_0:
+                    print(f"⚠️ Failed to prepare eval dataloaders: {e}")
                 self.eval_during_training = False
 
         # Validate before training if requested
@@ -84,67 +90,101 @@ class HorovodTrainer(BaseTrainer):
             module.current_epoch += 1
             scheduler.step()
 
-    def _prepare_test_subset(self, test_dataloaders):
-        """테스트 데이터로더 준비"""
-        self.test_dataloader = test_dataloaders[0]
-
     @torch.no_grad()
     def _quick_eval(self, module):
-        """빠른 중간 평가 - 상세한 디버깅 포함"""
-        if not hasattr(self, 'test_dataloader'):
+        """효율적인 중간 평가 - validation 데이터로더 재사용"""
+        if self.eval_dataloaders is None:
             if self.is_rank_0:
-                print("   ❌ No test_dataloader available")
+                print("   ❌ No eval dataloaders available")
             return {}
         
         module.eval()
-        metrics = []
         
         try:
-            eval_size = min(25, self.eval_subset_size)
+            eval_size = min(10, self.eval_subset_size)
             if self.is_rank_0:
-                print(f"   📊 Running evaluation on {eval_size} samples...")
+                print(f"   📊 Running evaluation on {eval_size} samples per dataloader...")
             
-            for i, batch in enumerate(self.test_dataloader):
-                if i >= eval_size:
-                    break
-                
-                batch = sample_to_cuda(batch)
-                
-                # quick_test_step 호출 및 결과 확인
-                output = module.quick_test_step(batch, i, 0)
-                
-                if self.is_rank_0 and i == 0:
-                    print(f"   🔍 First batch output: {output}")
-                
-                # abs_rel 값 추출
-                abs_rel = output.get('abs_rel', 0.0)
-                if abs_rel > 0:
-                    metrics.append(abs_rel)
-                    if self.is_rank_0 and i < 3:
-                        print(f"   ✅ Sample {i}: abs_rel = {abs_rel:.4f}")
+            results = {}
             
-            if metrics:
-                avg_abs_rel = sum(metrics) / len(metrics)
-                if self.is_rank_0:
-                    print(f"   📈 Average abs_rel: {avg_abs_rel:.4f} (from {len(metrics)} samples)")
-                return {'abs_rel': avg_abs_rel}
-            else:
-                if self.is_rank_0:
-                    print("   ⚠️  No valid metrics collected")
-                return {}
-        
+            # 🆕 각 validation 데이터로더에서 빠른 평가
+            for i, dataloader in enumerate(self.eval_dataloaders):
+                # 데이터로더 타입 확인
+                dataset_config = module.config.datasets.validation
+                input_depth_type = dataset_config.input_depth_type[i] if i < len(dataset_config.input_depth_type) else ''
+                eval_type = "RGB+LiDAR" if input_depth_type else "RGB-only"
+                
+                # 빠른 평가 수행
+                metrics = self._evaluate_single_dataloader(module, dataloader, eval_size, eval_type)
+                
+                # 결과 저장
+                if eval_type == "RGB-only":
+                    results['rgb_abs_rel'] = metrics.get('abs_rel', 0.0)
+                else:  # RGB+LiDAR
+                    results['rgbd_abs_rel'] = metrics.get('abs_rel', 0.0)
+            
+            return results
+            
         except Exception as e:
             if self.is_rank_0:
                 print(f"   ❌ Evaluation error: {e}")
-                import traceback
-                traceback.print_exc()
             return {}
         
         finally:
             module.train()
 
+    def _evaluate_single_dataloader(self, module, dataloader, eval_size, mode_name):
+        """단일 데이터로더 평가 - 간소화된 버전"""
+        metrics = []
+        
+        if self.is_rank_0:
+            print(f"   🔍 Evaluating {mode_name}...")
+        
+        for i, batch in enumerate(dataloader):
+            if i >= eval_size:
+                break
+            
+            try:
+                batch = sample_to_cuda(batch)
+                
+                # 🔍 배치 정보 확인 (첫 번째 샘플만)
+                if self.is_rank_0 and i == 0:
+                    has_input_depth = 'input_depth' in batch and batch['input_depth'] is not None
+                    if has_input_depth:
+                        valid_points = (batch['input_depth'] > 0).sum().item()
+                        print(f"     LiDAR points: {valid_points}")
+                    else:
+                        print(f"     RGB-only mode")
+                
+                # validation_step 실행
+                output = module.validation_step(batch, i, 0)
+                
+                # 메트릭 추출 (depth_gt의 첫 번째 값이 abs_rel)
+                if isinstance(output, dict) and 'depth_gt' in output:
+                    depth_gt_metrics = output['depth_gt']
+                    if isinstance(depth_gt_metrics, torch.Tensor) and depth_gt_metrics.numel() >= 1:
+                        abs_rel = depth_gt_metrics[0].item()
+                        if abs_rel > 0:
+                            metrics.append(abs_rel)
+            
+            except Exception as batch_error:
+                if self.is_rank_0:
+                    print(f"     ⚠️ Error processing {mode_name} batch {i}: {batch_error}")
+                continue
+        
+        # 결과 계산 및 반환
+        if metrics:
+            avg_abs_rel = sum(metrics) / len(metrics)
+            if self.is_rank_0:
+                print(f"     📈 {mode_name} abs_rel: {avg_abs_rel:.4f} (from {len(metrics)} samples)")
+            return {'abs_rel': avg_abs_rel}
+        else:
+            if self.is_rank_0:
+                print(f"     ⚠️ No valid {mode_name} metrics collected")
+            return {}
+
     def train_with_eval(self, dataloader, module, optimizer):
-        """중간 평가가 포함된 훈련 - 단순 버전"""
+        """중간 평가가 포함된 훈련 - 간소화된 버전"""
         module.train()
 
         if hasattr(dataloader.sampler, "set_epoch"):
@@ -154,16 +194,17 @@ class HorovodTrainer(BaseTrainer):
         outputs = []
         total_batches = len(dataloader)
         
-        # 🆕 평가 간격을 배치 수로 계산 (더 예측 가능)
-        eval_interval_batches = max(1, int(total_batches * self.eval_progress_interval))
+        # 평가 간격 계산
+        eval_interval_batches = max(50, int(total_batches * self.eval_progress_interval))
         
-        if self.is_rank_0:
+        if self.is_rank_0 and self.eval_during_training:
             print(f"\n🔍 Will evaluate every {eval_interval_batches} batches")
 
         for batch_idx, batch in progress_bar:
-            # 🆕 간단한 배치 기준 평가
+            # 🆕 간소화된 중간 평가
             eval_info = ""
             if (self.eval_during_training and 
+                self.eval_dataloaders is not None and
                 batch_idx > 0 and 
                 batch_idx % eval_interval_batches == 0):
                 
@@ -172,11 +213,17 @@ class HorovodTrainer(BaseTrainer):
                 
                 eval_metrics = self._quick_eval(module)
                 
-                abs_rel = eval_metrics.get('abs_rel', 0.0)
-                if abs_rel > 0:
-                    eval_info = f" | Test abs_rel: {abs_rel:.4f}"
-                    if self.is_rank_0:
-                        print(f"✅ Result: {abs_rel:.4f}")
+                # 🆕 간단한 결과 표시
+                rgb_abs_rel = eval_metrics.get('rgb_abs_rel', None)
+                rgbd_abs_rel = eval_metrics.get('rgbd_abs_rel', None)
+                
+                if rgb_abs_rel is not None and rgbd_abs_rel is not None:
+                    improvement = rgb_abs_rel - rgbd_abs_rel
+                    eval_info = f" | RGB={rgb_abs_rel:.4f} vs RGB+D={rgbd_abs_rel:.4f} (Δ{improvement:+.4f})"
+                elif rgb_abs_rel is not None:
+                    eval_info = f" | RGB={rgb_abs_rel:.4f}"
+                elif rgbd_abs_rel is not None:
+                    eval_info = f" | RGB+D={rgbd_abs_rel:.4f}"
 
             # 정상 훈련 스텝
             optimizer.zero_grad()
