@@ -4,10 +4,13 @@ import torch
 import torch.nn as nn
 
 from packnet_sfm.utils.image import match_scales
+from packnet_sfm.utils.depth import inv2depth
+
 from packnet_sfm.losses.loss_base import LossBase, ProgressiveScaling
 from packnet_sfm.losses.ssi_loss import SSILoss
 from packnet_sfm.losses.ssi_trim_loss import SSITrimLoss
 from packnet_sfm.losses.ssi_loss_enhanced import EnhancedSSILoss, ProgressiveEnhancedSSILoss
+from packnet_sfm.losses.ssi_silog_loss import SSISilogLoss
 
 ########################################################################################################################
 
@@ -74,6 +77,8 @@ class SilogLoss(nn.Module):
 
 def get_loss_func(supervised_method):
     """Determines the supervised loss to be used, given the supervised method."""
+    print(f"🔍 Loading loss function for: {supervised_method}")
+    
     if supervised_method.endswith('l1'):
         return nn.L1Loss()
     elif supervised_method.endswith('mse'):
@@ -86,13 +91,15 @@ def get_loss_func(supervised_method):
         return lambda x, y: torch.mean(torch.abs(x - y) / x)
     elif supervised_method.endswith('ssi'):
         return SSILoss()
-    # 🆕 Enhanced SSI Loss options
     elif supervised_method.endswith('enhanced-ssi'):
         return EnhancedSSILoss()
     elif supervised_method.endswith('progressive-ssi'):
         return ProgressiveEnhancedSSILoss()
     elif supervised_method.endswith('ssi-trim'):
         return SSITrimLoss(trim=0.2, epsilon=1e-6)
+    elif supervised_method.endswith('ssi-silog'):
+        # 🆕 클래스 기반 SSI-Silog 손실
+        return SSISilogLoss()
     else:
         raise ValueError('Unknown supervised loss {}'.format(supervised_method))
 

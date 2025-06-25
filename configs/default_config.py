@@ -56,7 +56,7 @@ cfg.model.depth_net.use_enhanced_lidar = False  # Enable enhanced LiDAR processi
 
 # 🆕 YOLOv8SAN01 전용 파라미터 (선택적으로만 사용)
 cfg.model.depth_net.variant = 's'           # YOLOv8 variant (n, s, m, l, x) - YOLOv8SAN01에서만 사용
-
+cfg.model.depth_net.use_head_features = False
 ########################################################################################################################
 ### MODEL.POSE_NET
 ########################################################################################################################

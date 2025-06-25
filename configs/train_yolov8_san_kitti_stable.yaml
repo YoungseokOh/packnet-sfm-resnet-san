@@ -1,7 +1,7 @@
 model:
     name: 'SemiSupCompletionModel'
     loss:
-        supervised_method: 'sparse-ssi'
+        supervised_method: 'sparse-ssi-silog'
         supervised_num_scales: 1
         supervised_loss_weight: 1.0
     optimizer:
@@ -20,7 +20,8 @@ model:
         dropout: 0.1
         use_film: False
         film_scales: [0]
-        use_enhanced_lidar: false
+        use_enhanced_lidar: False
+        use_head_features: True
     params:
         crop: 'garg'
         min_depth: 0.1
@@ -32,13 +33,13 @@ datasets:
         crop_train_borders: (-352, 0, 0.5, 1216)
         crop_eval_borders: (-352, 0, 0.5, 1216)
     train:
-        batch_size: 1  # 작게 시작
+        batch_size: 8  # 작게 시작
         dataset: ['KITTI']
         path: ['/data/datasets/KITTI_raw']
         split: ['data_splits/eigen_zhou_files_tiny.txt']
         input_depth_type: ['velodyne']
         depth_type: ['groundtruth']
-        repeat: [1]
+        repeat: [2]
     validation:
         dataset: ['KITTI']
         path: ['/data/datasets/KITTI_raw']
@@ -55,8 +56,8 @@ arch:
     eval_subset_size: 50
 
 checkpoint:
-    filepath: 'checkpoints/yolov8san01_s_ssi_trim/'
+    filepath: 'checkpoints/yolov8san01_s_head_features_extractor/'
     save_top_k: -1
 
 save:
-    folder: 'outputs/yolov8san01_s_ssi_trim/'
+    folder: 'outputs/yolov8san01_s_head_features_extractor/'
