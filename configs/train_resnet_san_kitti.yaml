@@ -1,7 +1,7 @@
 model:
     name: 'SemiSupCompletionModel'
     loss:
-        supervised_method: 'sparse-silog'
+        supervised_method: 'sparse-ssi-silog'
         supervised_num_scales: 1
         supervised_loss_weight: 1.0
     optimizer:
@@ -17,7 +17,11 @@ model:
     depth_net:
         name: 'ResNetSAN01'
         version: '18A'
-        dropout: 0.5
+        dropout: 0.1
+        # 🔧 기존 구조로 설정
+        use_film: false           # 체크포인트와 동일하게
+        film_scales: [0]         # 체크포인트와 동일하게
+        use_enhanced_lidar: false  # ❌ Enhanced 비활성화
     params:
         crop: 'garg'
         min_depth: 0.0
@@ -46,8 +50,8 @@ datasets:
         dataset: ['KITTI']
         path: ['/data/datasets/KITTI_raw']
         split: ['data_splits/eigen_test_files.txt']
-        input_depth_type: ['velodyne']
-        depth_type: ['groundtruth']
+        input_depth_type: ['velodyne','']
+        depth_type: ['groundtruth','groundtruth']
 
 # 🆕 중간 평가 설정
 arch:
@@ -59,8 +63,8 @@ arch:
     eval_subset_size: 50
 
 checkpoint:
-    filepath: 'checkpoints/resnetsan01/'
+    filepath: 'checkpoints/resnetsan01-ssi-silog/'
     save_top_k: -1
 
 save:
-    folder: 'outputs/resnetsan01/'
+    folder: 'outputs/resnetsan01-ssi-silog/'

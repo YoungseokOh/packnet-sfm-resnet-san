@@ -27,6 +27,7 @@ wheels/
 .installed.cfg
 *.egg
 *.pt
+*.ckpt
 client.py
 MANIFEST
 

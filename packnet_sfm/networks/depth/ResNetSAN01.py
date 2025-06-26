@@ -29,18 +29,17 @@ class ResNetSAN01(nn.Module):
         super().__init__()
         
         # 🆕 기존 파라미터만 사용
-        # use_enhanced_lidar는 제거하고 기본적으로 True로 설정
-        use_enhanced_lidar = kwargs.get('use_enhanced_lidar', True)
+        use_enhanced_lidar = kwargs.get('use_enhanced_lidar', False)  # 기본값 False로 변경
         
         # Parse version string
         if version:
-            num_layers = int(''.join(filter(str.isdigit, version)))
-            self.variant = ''.join(filter(str.isalpha, version)) or 'A'
+            num_layers = int(version[:2])
+            self.variant = version[2:] if len(version) > 2 else 'A'
         else:
             num_layers = 18
             self.variant = 'A'
         
-        print(f"🏗️  Initializing ResNetSAN01 with ResNet-{num_layers} (variant {self.variant})")
+        print(f"🏗️ Initializing ResNetSAN01 with ResNet-{num_layers} (variant {self.variant})")
         
         # ResNet encoder
         self.encoder = ResnetEncoder(num_layers=num_layers, pretrained=True)
@@ -56,66 +55,48 @@ class ResNetSAN01(nn.Module):
         # FiLM configuration
         rgb_channels_per_scale = None
         if use_film:
-            encoder_channels = self.encoder.num_ch_enc
             rgb_channels_per_scale = []
-            
-            for i in range(len(encoder_channels)):
+            for i in range(len(self.encoder.num_ch_enc)):
                 if i in film_scales:
-                    rgb_channels_per_scale.append(encoder_channels[i])
+                    rgb_channels_per_scale.append(self.encoder.num_ch_enc[i])
                 else:
                     rgb_channels_per_scale.append(0)
-    
-        # Minkowski encoder 선택
+
+        # 🔧 Minkowski encoder 선택 (조건부)
         if use_enhanced_lidar:
-            # Enhanced 버전이 없다면 일단 기존 버전 사용
-            try:
-                from packnet_sfm.networks.layers.enhanced_minkowski_encoder import EnhancedMinkowskiEncoder
-                self.mconvs = EnhancedMinkowskiEncoder(
-                    self.encoder.num_ch_enc, 
-                    rgb_channels=rgb_channels_per_scale,
-                    with_uncertainty=False,
-                    use_geometry_processor=True
-                )
-                print("🎯 Enhanced LiDAR processing enabled")
-            except ImportError:
-                # Enhanced 버전이 없으면 기존 버전 사용
-                print("⚠️ Enhanced LiDAR not available, using standard version")
-                from packnet_sfm.networks.layers.minkowski_encoder import MinkowskiEncoder
-                self.mconvs = MinkowskiEncoder(
-                    self.encoder.num_ch_enc, 
-                    rgb_channels=rgb_channels_per_scale,
-                    with_uncertainty=False
-                )
-                print("📊 Standard LiDAR processing")
-        else:
-            # 기존 MinkowskiEncoder 사용
-            from packnet_sfm.networks.layers.minkowski_encoder import MinkowskiEncoder
-            self.mconvs = MinkowskiEncoder(
-                self.encoder.num_ch_enc, 
+            print("🔧 Using EnhancedMinkowskiEncoder")
+            from packnet_sfm.networks.layers.enhanced_minkowski_encoder import EnhancedMinkowskiEncoder
+            self.mconvs = EnhancedMinkowskiEncoder(
+                self.encoder.num_ch_enc,
                 rgb_channels=rgb_channels_per_scale,
                 with_uncertainty=False
             )
-            print("📊 Standard LiDAR processing")
+            
+            # Feature refinement layers (Enhanced용)
+            self.feature_refinement = nn.ModuleList([
+                nn.Sequential(
+                    nn.Conv2d(ch, ch, 3, padding=1, bias=False),
+                    nn.BatchNorm2d(ch),
+                    nn.ReLU(inplace=True),
+                    nn.Conv2d(ch, ch, 3, padding=1, bias=False)
+                ) for ch in self.encoder.num_ch_enc
+            ])
+        else:
+            print("🔧 Using standard MinkowskiEncoder")
+            from packnet_sfm.networks.layers.minkowski_encoder import MinkowskiEncoder
+            self.mconvs = MinkowskiEncoder(
+                self.encoder.num_ch_enc,
+                rgb_channels=rgb_channels_per_scale,
+                with_uncertainty=False
+            )
         
-        # 🆕 Learnable fusion weights with improved initialization
+        # Learnable fusion weights
         self.weight = torch.nn.parameter.Parameter(
-            torch.ones(5) * 0.5, requires_grad=True  # Start with balanced fusion
+            torch.ones(5) * 0.5, requires_grad=True
         )
         self.bias = torch.nn.parameter.Parameter(
             torch.zeros(5), requires_grad=True
         )
-        
-        # 🆕 Feature refinement layers
-        if use_enhanced_lidar:
-            self.feature_refinement = nn.ModuleDict()
-            for i, ch in enumerate(self.encoder.num_ch_enc):
-                self.feature_refinement[str(i)] = nn.Sequential(
-                    nn.Conv2d(ch, ch, kernel_size=3, padding=1),
-                    nn.BatchNorm2d(ch),
-                    nn.ReLU(inplace=True),
-                    nn.Conv2d(ch, ch, kernel_size=1),
-                    nn.Sigmoid()
-                )
         
         print(f"🎯 FiLM enabled: {use_film}")
         if use_film:

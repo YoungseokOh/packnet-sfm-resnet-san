@@ -10,11 +10,17 @@
             "type": "debugpy", 
             "request": "launch",
             "program": "${workspaceFolder}/scripts/train.py",
+            // "program": "${workspaceFolder}/scripts/eval.py",
             "console": "integratedTerminal",
             "args": 
             [
-                "configs/train_yolov8_san_kitti_stable.yaml"
+                "configs/train_resnet_san_kitti.yaml"
             ],
+            // "args": 
+            // [
+            //     "--checkpoint","/workspace/packnet-sfm/checkpoints/resnetsan01/resnet-san_e29.ckpt",
+            //     "--config", "configs/train_resnet_san_kitti.yaml"
+            // ],
             "cwd": "${workspaceFolder}",
             "env": 
             {
