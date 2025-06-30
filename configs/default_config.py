@@ -39,7 +39,7 @@ cfg.model.loss.velocity_loss_weight = 0.1      # Velocity supervision loss weigh
 cfg.model.loss.supervised_method = 'sparse-l1' # Method for depth supervision
 cfg.model.loss.supervised_num_scales = 4       # Number of scales for supervised learning
 cfg.model.loss.supervised_loss_weight = 0.9    # Supervised loss weight
-
+cfg.model.loss.consistency_loss_weight = 0.1   # Consistency loss weight (for Yolov8 Semi-Supervised Learning)
 ########################################################################################################################
 ### MODEL.DEPTH_NET
 ########################################################################################################################
@@ -57,6 +57,7 @@ cfg.model.depth_net.use_enhanced_lidar = False  # Enable enhanced LiDAR processi
 # 🆕 YOLOv8SAN01 전용 파라미터 (선택적으로만 사용)
 cfg.model.depth_net.variant = 's'           # YOLOv8 variant (n, s, m, l, x) - YOLOv8SAN01에서만 사용
 cfg.model.depth_net.use_head_features = False
+cfg.model.depth_net.use_imagenet_pretrained = False  # Enable enhanced LiDAR processing in YOLOv8SAN01
 ########################################################################################################################
 ### MODEL.POSE_NET
 ########################################################################################################################

@@ -7,7 +7,7 @@ import traceback
 import json
 from packnet_sfm.trainers.base_trainer import BaseTrainer, sample_to_cuda
 from packnet_sfm.utils.config import prep_logger_and_checkpoint
-from packnet_sfm.utils.logging import print_config
+from packnet_sfm.utils.logging import print_config, pcolor
 from packnet_sfm.utils.logging import AvgMeter
 from tqdm import tqdm
 
@@ -29,6 +29,9 @@ class HorovodTrainer(BaseTrainer):
         self.eval_during_training = kwargs.get('eval_during_training', True)
         self.eval_progress_interval = kwargs.get('eval_progress_interval', 0.1)
         self.eval_subset_size = kwargs.get('eval_subset_size', 50)
+        # ❗ 추가: 설정된 값을 명확히 확인하기 위한 로그
+        if self.is_rank_0:
+            print(pcolor('  |  eval_subset_size: {}'.format(self.eval_subset_size), 'yellow'))
 
     @property
     def proc_rank(self):
@@ -105,7 +108,7 @@ class HorovodTrainer(BaseTrainer):
         module.eval()
         
         try:
-            eval_size = min(10, self.eval_subset_size)
+            eval_size = max(50, self.eval_subset_size)
             if self.is_rank_0:
                 print(f"   📊 Running evaluation on {eval_size} samples per dataloader...")
             
@@ -198,11 +201,12 @@ class HorovodTrainer(BaseTrainer):
         outputs = []
         total_batches = len(dataloader)
         
-        # 평가 간격 계산
-        eval_interval_batches = max(50, int(total_batches * self.eval_progress_interval))
+        # ❗ 수정: max(50, ...) 부분을 제거하여 YAML 설정이 직접 반영되도록 함
+        # 0이 되는 것을 방지하기 위해 max(1, ...) 사용
+        eval_interval_batches = max(1, int(total_batches * self.eval_progress_interval))
         
         if self.is_rank_0 and self.eval_during_training:
-            print(f"\n🔍 Will evaluate every {eval_interval_batches} batches")
+            print(pcolor('\n🔍 Will evaluate every {} batches'.format(eval_interval_batches), 'yellow', attrs=['bold']))
 
         for batch_idx, batch in progress_bar:
             # 🆕 간소화된 중간 평가

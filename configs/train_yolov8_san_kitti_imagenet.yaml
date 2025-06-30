@@ -4,8 +4,6 @@ model:
         supervised_method: 'sparse-ssi-silog'
         supervised_num_scales: 1
         supervised_loss_weight: 1.0
-        # ❗ 일관성 손실 가중치 추가 (YOLOv8 모델에만 적용됨, 0으로 설정 시 비활성화)
-        consistency_loss_weight: 0.1
     optimizer:
         name: 'Adam'
         depth:
@@ -14,7 +12,7 @@ model:
             lr: 0.0001
     scheduler:
         name: 'StepLR'
-        step_size: 10
+        step_size: 15
         gamma: 0.5
     depth_net:
         name: 'YOLOv8SAN01'
@@ -23,7 +21,8 @@ model:
         use_film: false
         film_scales: [0]
         use_enhanced_lidar: false
-        use_head_features: true
+        use_head_features: false        # ImageNet 모델은 detection head 없음
+        use_imagenet_pretrained: true   # 🆕 ImageNet classification model 사용
     params:
         crop: 'garg'
         min_depth: 0.1
@@ -35,7 +34,7 @@ datasets:
         crop_train_borders: (-352, 0, 0.5, 1216)
         crop_eval_borders: (-352, 0, 0.5, 1216)
     train:
-        batch_size: 4  # 작게 시작
+        batch_size: 4
         dataset: ['KITTI']
         path: ['/data/datasets/KITTI_raw']
         split: ['data_splits/eigen_zhou_files_tiny.txt']
@@ -48,12 +47,6 @@ datasets:
         split: ['data_splits/eigen_test_files.txt']
         input_depth_type: ['velodyne','']
         depth_type: ['groundtruth','groundtruth']
-    test:
-        dataset: ['KITTI']
-        path: ['/data/datasets/KITTI_raw']
-        split: ['data_splits/eigen_test_files.txt']
-        input_depth_type: ['velodyne','']
-        depth_type: ['groundtruth','groundtruth']        
 
 arch:
     seed: 42
@@ -61,11 +54,11 @@ arch:
     max_epochs: 15
     eval_during_training: true
     eval_progress_interval: 0.5
-    eval_subset_size: 200
+    eval_subset_size: 100
 
 checkpoint:
-    filepath: 'checkpoints/yolov8san01_s_head_features_extractor/'
+    filepath: 'checkpoints/yolov8san01_imagenet/'
     save_top_k: -1
 
 save:
-    folder: 'outputs/yolov8san01_s_head_features_extractor/'
+    folder: 'outputs/yolov8san01_imagenet/'

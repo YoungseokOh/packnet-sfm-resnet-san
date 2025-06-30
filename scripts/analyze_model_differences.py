@@ -7,6 +7,8 @@ from pathlib import Path
 from collections import OrderedDict
 import argparse
 import os
+from PIL import Image
+import torchvision.transforms as T
 
 # PackNet-SfM imports
 from packnet_sfm.utils.config import parse_test_file
@@ -16,12 +18,38 @@ from packnet_sfm.networks.depth.YOLOv8SAN01 import YOLOv8SAN01
 
 
 class ModelAnalyzer:
-    def __init__(self, resnet_ckpt, yolov8_ckpt):
+    def __init__(self, resnet_ckpt, yolov8_ckpt, image_path):
         self.resnet_model = self.load_resnet_model(resnet_ckpt)
         self.yolov8_model = self.load_yolov8_model(yolov8_ckpt)
+        self.input_tensor = self.load_image_tensor(image_path)
         
         # 분석 결과 저장용
         self.analysis_results = {}
+
+    def load_image_tensor(self, image_path):
+        """이미지를 로드하고 모델 입력에 맞게 텐서로 변환"""
+        if not image_path or not os.path.exists(image_path):
+            print("⚠️ Input image not found. Using random tensor as fallback.")
+            return torch.randn(1, 3, 352, 1216)
+        
+        print(f"🖼️ Loading input image from: {image_path}")
+        try:
+            input_image = Image.open(image_path).convert("RGB")
+            
+            # 모델 입력 크기에 맞게 리사이즈 및 텐서 변환
+            transform = T.Compose([
+                T.Resize((352, 1216)),
+                T.ToTensor(),
+                T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            ])
+            
+            image_tensor = transform(input_image).unsqueeze(0)
+            print(f"✅ Image loaded and transformed to shape: {image_tensor.shape}")
+            return image_tensor
+            
+        except Exception as e:
+            print(f"❌ Failed to load image: {e}. Using random tensor as fallback.")
+            return torch.randn(1, 3, 352, 1216)
     
     def load_resnet_model(self, checkpoint_path):
         """ResNet-SAN 모델 로드"""
@@ -122,16 +150,14 @@ class ModelAnalyzer:
         print(f"   Ratio: {yolov8_params/resnet_params:.2f}x")
         
         # 1.2 Feature Map 크기 및 복잡도 비교
-        dummy_input = torch.randn(1, 3, 352, 1216)
-        
         with torch.no_grad():
             try:
                 # ResNet features
                 print("📊 Analyzing ResNet features...")
-                resnet_features = self.resnet_model.encoder(dummy_input)
+                resnet_features = self.resnet_model.encoder(self.input_tensor)
                 
                 print("📊 Analyzing YOLOv8 features...")
-                yolov8_features = self.yolov8_model.extract_features(dummy_input)
+                yolov8_features = self.yolov8_model.extract_features(self.input_tensor)
                 
                 # Feature 통계
                 resnet_stats = self.compute_feature_stats(resnet_features, "ResNet")
@@ -589,17 +615,64 @@ class ModelAnalyzer:
         print("🚀 Starting comprehensive model analysis...")
         
         # 분석 실행
-        self.analyze_feature_complexity()
+        complexity_results = self.analyze_feature_complexity()
         self.analyze_rgb_feature_quality()
         self.analyze_lidar_fusion_mechanism()
         
         # 결과 저장 및 시각화
         os.makedirs(save_dir, exist_ok=True)
+        if complexity_results:
+            self.visualize_feature_maps(complexity_results, save_dir)
         self.visualize_results(save_dir)
         self.generate_report(save_dir)
         
         print(f"\n✅ Analysis complete! Results saved in: {save_dir}/")
         return self.analysis_results
+    
+    def visualize_feature_maps(self, complexity_results, save_dir, num_channels=8):
+        """모든 스케일에 대한 특징 맵 시각화"""
+        print(f"🎨 Visualizing feature maps for all scales...")
+        
+        num_scales = len(complexity_results['resnet_features'])
+        
+        for scale_idx in range(num_scales):
+            resnet_features = complexity_results['resnet_features'][scale_idx].detach().cpu()
+            yolov8_features = complexity_results['yolov8_features'][scale_idx].detach().cpu()
+            
+            # 채널 수가 num_channels보다 작을 경우 조정
+            current_num_channels = min(num_channels, resnet_features.shape[1], yolov8_features.shape[1])
+            
+            if current_num_channels == 0:
+                print(f"⚠️ Skipping feature map visualization for scale {scale_idx} due to 0 channels.")
+                continue
+
+            fig, axes = plt.subplots(2, current_num_channels, figsize=(current_num_channels * 2, 4.5))
+            fig.suptitle(f'Feature Map Comparison (Scale {scale_idx})', fontsize=16)
+            
+            for i in range(current_num_channels):
+                # ResNet-SAN
+                ax = axes[0, i]
+                ax.imshow(resnet_features[0, i], cmap='viridis')
+                ax.axis('off')
+                if i == 0:
+                    ax.set_title(f'ResNet-SAN\nChannel {i}', fontsize=10)
+                else:
+                    ax.set_title(f'Channel {i}', fontsize=10)
+
+                # YOLOv8-SAN
+                ax = axes[1, i]
+                ax.imshow(yolov8_features[0, i], cmap='viridis')
+                ax.axis('off')
+                if i == 0:
+                    ax.set_title(f'YOLOv8-SAN\nChannel {i}', fontsize=10)
+                else:
+                    ax.set_title(f'Channel {i}', fontsize=10)
+            
+            plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+            save_path = f"{save_dir}/feature_maps_comparison_scale_{scale_idx}.png"
+            plt.savefig(save_path, dpi=200, bbox_inches='tight')
+            plt.close()
+            print(f"  ✅ Feature map visualization for scale {scale_idx} saved to: {save_path}")
 
 
 def parse_args():
@@ -609,6 +682,8 @@ def parse_args():
                         help='Path to ResNet-SAN checkpoint (.ckpt)')
     parser.add_argument('--yolov8_checkpoint', type=str, required=True,
                         help='Path to YOLOv8-SAN checkpoint (.ckpt)')
+    parser.add_argument('--input_image', type=str, default=None,
+                        help='Path to a sample image for feature analysis')
     parser.add_argument('--output_dir', type=str, default='analysis_results',
                         help='Output directory for analysis results')
     
@@ -630,7 +705,7 @@ def main():
     
     # Run analysis
     try:
-        analyzer = ModelAnalyzer(args.resnet_checkpoint, args.yolov8_checkpoint)
+        analyzer = ModelAnalyzer(args.resnet_checkpoint, args.yolov8_checkpoint, args.input_image)
         results = analyzer.run_full_analysis(args.output_dir)
         
         print("\n🎯 Key Findings:")

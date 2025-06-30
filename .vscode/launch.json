@@ -9,28 +9,62 @@
             "name": "Train from Config",
             "type": "debugpy", 
             "request": "launch",
+
+            // 실행할 스크립트 파일을 하나만 주석 해제하세요:
             "program": "${workspaceFolder}/scripts/train.py",
             // "program": "${workspaceFolder}/scripts/eval.py",
+            // "program": "${workspaceFolder}/scripts",  
+
             "console": "integratedTerminal",
+
+            // 필요에 따라 args 를 주석 해제/수정하세요:
             "args": 
             [
-                "configs/train_resnet_san_kitti.yaml"
+                "configs/train_yolov8_san_kitti_imagenet.yaml"
             ],
-            // "args": 
-            // [
-            //     "--checkpoint","/workspace/packnet-sfm/checkpoints/resnetsan01/resnet-san_e29.ckpt",
-            //     "--config", "configs/train_resnet_san_kitti.yaml"
+            // "args": [
+            //     "--checkpoint",
+            //     "/workspace/packnet-sfm/checkpoints/resnetsan01/resnet-san_e29.ckpt",
+            //     "--config", 
+            //     "configs/train_resnet_san_kitti.yaml"
             // ],
+            // "args": [
+            //     "--results-dir",
+            //     "checkpoints/.../evaluation_results"
+            // ],
+
             "cwd": "${workspaceFolder}",
             "env": 
             {
                 "PYTHONPATH": "${workspaceFolder}"
             }     
-        }
-            // python scripts/eval_pytorch_onnx_comparison.py     
-            // --checkpoint /workspace/packnet-sfm/checkpoints/resnetsan01/default_config-train_resnet_san_kitti-2025.06.05-09h50m24s/epoch=20_KITTI_raw-eigen_test_files-groundtruth-loss=0.000.ckpt     --onnx_model onnx/model_1216x352_reflect.onnx 
-            // --data_path /data/datasets/KITTI_raw 
-            // --split_file /data/datasets/KITTI_raw/data_splits/eigen_test_files.txt
-            // --use_gt_scale
+        },
+
+        // {
+        //     "name": "Run Current Python File",
+        //     "type": "debugpy", 
+        //     "request": "launch",
+        //     "program": "${file}",        // 활성 에디터에 열린 .py 파일 실행
+        //     "console": "integratedTerminal",
+        //     "cwd": "${workspaceFolder}",
+        //     "env": 
+        //     {
+        //         "PYTHONPATH": "${workspaceFolder}"
+        //     },
+        //     // 실행 시 args 가 필요하면 아래 주석 해제
+        //     "args": 
+        //     [   "--checkpoint",
+        //         "/workspace/packnet-sfm/checkpoints/resnetsan01-ssi-silog/from_worker6/resnet_e29_ssi+silog.ckpt",
+        //          "--output",
+        //         "/workspace/packnet-sfm/checkpoints/resnetsan01-ssi-silog/from_worker6/resnet_e29_ssi+silog.onnx",
+        //     ]   
+        // }
+
+        // python scripts/eval_pytorch_onnx_comparison.py     
+        // --checkpoint /workspace/packnet-sfm/checkpoints/.../epoch=20_... .ckpt
+        // --onnx_model onnx/model_1216x352_reflect.onnx 
+        // --data_path /data/datasets/KITTI_raw 
+        // --split_file /data/datasets/KITTI_raw/data_splits/eigen_test_files.txt
+        // --use_gt_scale
     ]
 }

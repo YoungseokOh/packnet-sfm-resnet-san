@@ -120,92 +120,89 @@ class C2f(nn.Module):
 
 class YOLOv8SAN01(nn.Module):
     """
-    🆕 YOLOv8-based SAN network (PackNet-SAN compatible)
-    
-    Parameters
-    ----------
-    variant : str
-        YOLOv8 variant ('n', 's', 'm', 'l', 'x')
-    use_film : bool
-        Whether to use Depth-aware FiLM modulation
-    film_scales : list of int
-        Which scales to apply FiLM (default: [0] - first scale only)
-    use_head_features : bool
-        Whether to use Head Feature Extraction (default: False)
-    kwargs : dict
-        Extra parameters
+    🆕 YOLOv8-based SAN network (간소화된 버전)
     """
     def __init__(self, variant='s', use_film=False, film_scales=[0], 
-                 use_head_features=False, **kwargs):
+                 use_head_features=False, use_imagenet_pretrained=False, **kwargs):
         super().__init__()
         
-        print(f"🏗️ Initializing YOLOv8SAN01 with YOLOv8{variant}")
-        print(f"   Use Head Features: {use_head_features}")
-        
-        # variant 속성을 먼저 저장
         self.variant = variant
         self.use_head_features = use_head_features
+        self.use_imagenet_pretrained = use_imagenet_pretrained
         
-        # YOLOv8 백본 로드
+        print(f"🏗️ Initializing YOLOv8SAN01 with YOLOv8{variant}")
+        print(f"   Use ImageNet pretrained: {use_imagenet_pretrained}")
+        print(f"   Use Head Features: {use_head_features}")
+        
+        # 백본 로드
         try:
-            yolo_model = YOLO(f'yolov8{variant}.pt')
-            self.backbone = yolo_model.model.model
-            print(f"✅ YOLOv8{variant} backbone loaded successfully")
+            if use_imagenet_pretrained:
+                model_name = f'yolov8{variant}-cls.pt'
+                print(f"🔄 Loading ImageNet classification model: {model_name}")
+            else:
+                model_name = f'yolov8{variant}.pt'
+                print(f"🔄 Loading COCO detection model: {model_name}")
+            
+            temp_model = YOLO(model_name)
+            self.backbone = temp_model.model.model
+            del temp_model
+            
         except Exception as e:
-            print(f"❌ Failed to load YOLOv8{variant}: {e}")
-            raise
+            print(f"❌ Failed to load {model_name}: {e}")
+            print("🔄 Falling back to COCO detection model...")
+            temp_model = YOLO(f'yolov8{variant}.pt')
+            self.backbone = temp_model.model.model
+            del temp_model
+            self.use_imagenet_pretrained = False
         
-        # ResNet DepthDecoder 호환을 위한 정확한 채널 구조
-        resnet_channels = [64, 64, 128, 256, 512]  # ResNet-18 표준
+        # ResNet 호환 채널 구조 (고정)
+        self.resnet_channels = [64, 64, 128, 256, 512]
         
-        # 🆕 실제 채널 탐지 (runtime에서 확인)
-        self.yolo_channels = self._probe_actual_channels()
+        # YOLOv8에서 실제 추출되는 채널
+        yolo_channel_configs = {
+            'n': [32, 64, 128, 256, 512],
+            's': [64, 64, 128, 256, 256],
+            'm': [48, 96, 192, 384, 576],
+            'l': [64, 128, 256, 512, 512],
+            'x': [80, 160, 320, 640, 640],
+        }
+        self.yolo_channels = yolo_channel_configs.get(variant, [64, 64, 128, 256, 256])
         
-        if self.use_head_features:
-            # Head Feature Extractor 초기화
-            self.head_feature_extractor = YOLOv8HeadFeatureExtractor(
-                self.yolo_channels, variant=variant
-            )
-            # Head Feature Extractor의 출력 채널 사용
-            adapter_input_channels = self.head_feature_extractor.output_channels
-            print(f"🎯 Using Head Feature Extraction")
-            print(f"   Head output channels: {adapter_input_channels}")
-        else:
-            # Backbone 채널 직접 사용
-            adapter_input_channels = self.yolo_channels
-            print(f"🎯 Using Backbone Features Only")
-            print(f"   Backbone channels: {adapter_input_channels}")
+        # Feature adapter 생성
+        self.feature_adapters = nn.ModuleList()
+        for i, (yolo_ch, resnet_ch) in enumerate(zip(self.yolo_channels, self.resnet_channels)):
+            if yolo_ch != resnet_ch:
+                adapter = nn.Sequential(
+                    nn.Conv2d(yolo_ch, resnet_ch, kernel_size=1, bias=False),
+                    nn.BatchNorm2d(resnet_ch),
+                    nn.ReLU(inplace=True)
+                )
+            else:
+                adapter = nn.Identity()
+            self.feature_adapters.append(adapter)
         
-        # 🆕 Lazy adapter 초기화 (첫 번째 forward에서 생성)
-        self.adapter_input_channels = adapter_input_channels
-        self.resnet_channels = resnet_channels
-        self.feature_adapters = None
+        # ResNet DepthDecoder
+        self.decoder = DepthDecoder(num_ch_enc=self.resnet_channels)
         
-        # 최종 채널 수 (ResNet 호환)
-        self.num_ch_enc = resnet_channels
-        
-        # ResNet DepthDecoder 사용
-        self.decoder = DepthDecoder(num_ch_enc=self.num_ch_enc)
-        
-        # 🆕 PackNet-SAN과 동일한 SAN 설정
+        # SAN 설정
         self.use_film = use_film
         self.film_scales = film_scales
         self.use_enhanced_lidar = kwargs.get('use_enhanced_lidar', False)
         
-        # 🆕 PackNet-SAN과 동일한 FiLM configuration
+        # FiLM configuration
         rgb_channels_per_scale = None
         if use_film:
             rgb_channels_per_scale = []
-            for i in range(len(self.num_ch_enc)):
+            for i in range(len(self.resnet_channels)):
                 if i in film_scales:
-                    rgb_channels_per_scale.append(self.num_ch_enc[i])
+                    rgb_channels_per_scale.append(self.resnet_channels[i])
                 else:
                     rgb_channels_per_scale.append(0)
         
-        # 🆕 PackNet-SAN과 동일한 Minkowski encoder 설정
+        # Minkowski encoder 설정
         self._setup_minkowski_encoder(rgb_channels_per_scale)
         
-        # 🆕 PackNet-SAN과 동일한 Learnable fusion weights
+        # Learnable fusion weights
         self.weight = torch.nn.parameter.Parameter(
             torch.ones(5) * 0.5, requires_grad=True
         )
@@ -213,71 +210,29 @@ class YOLOv8SAN01(nn.Module):
             torch.zeros(5), requires_grad=True
         )
         
-        print(f"🎯 FiLM enabled: {use_film}")
-        if use_film:
-            print(f"   FiLM scales: {film_scales}")
-            print(f"   RGB channels per scale: {rgb_channels_per_scale}")
-        print(f"🔧 Final encoder channels: {self.num_ch_enc}")
+        print(f"🎯 Final configuration:")
+        print(f"   YOLOv8 channels: {self.yolo_channels}")
+        print(f"   ResNet channels: {self.resnet_channels}")
+        print(f"   FiLM enabled: {use_film}")
+        print(f"   FiLM scales: {film_scales}")
         
         self.init_weights()
 
-    def _probe_actual_channels(self):
-        """🆕 Runtime에서 실제 채널 수 탐지"""
-        print("🔍 Probing actual YOLOv8 channels at runtime...")
-        
-        # 더 작은 입력으로 테스트
-        dummy_input = torch.randn(1, 3, 32, 32)
-        channels = []
-        
-        with torch.no_grad():
-            x = dummy_input
-            for i, layer in enumerate(self.backbone):
-                try:
-                    x = layer(x)
-                    if i in [1, 2, 4, 6, 9]:  # 주요 레이어만
-                        channels.append(x.shape[1])
-                        print(f"   Layer {i}: {x.shape} -> {x.shape[1]} channels")
-                        if len(channels) >= 5:
-                            break
-                except Exception as layer_error:
-                    print(f"   ⚠️ Layer {i} failed: {layer_error}")
-                    break
-        
-        # 정확히 5개가 되도록 조정
-        while len(channels) < 5:
-            channels.append(channels[-1] if channels else 64)
-        
-        print(f"✅ Actual channels detected: {channels[:5]}")
-        return channels[:5]
-
-    def _setup_lazy_adapters(self, actual_channels):
-        """🆕 Runtime에서 실제 채널에 맞춰 adapter 생성"""
-        if self.feature_adapters is not None:
-            return  # 이미 생성됨
-        
-        self.feature_adapters = nn.ModuleList()
-        
-        for i, (actual_ch, resnet_ch) in enumerate(zip(actual_channels, self.resnet_channels)):
-            adapter = nn.Sequential(
-                nn.Conv2d(actual_ch, resnet_ch, kernel_size=1, bias=False),
-                nn.BatchNorm2d(resnet_ch),
-                nn.ReLU(inplace=True)
-            )
-            self.feature_adapters.append(adapter)
-        
-        # GPU로 이동 (필요한 경우)
-        if next(self.parameters()).is_cuda:
-            self.feature_adapters = self.feature_adapters.cuda()
-
     def _setup_minkowski_encoder(self, rgb_channels_per_scale):
-        """🆕 PackNet-SAN과 동일한 Minkowski encoder 설정"""
+        """Minkowski encoder 설정"""
         from packnet_sfm.networks.layers.minkowski_encoder import MinkowskiEncoder
-        self.mconvs = MinkowskiEncoder(
-            self.num_ch_enc,
-            rgb_channels=rgb_channels_per_scale,
-            with_uncertainty=False
-        )
-        print("📊 Standard LiDAR processing")
+        
+        if rgb_channels_per_scale is not None:
+            self.mconvs = MinkowskiEncoder(
+                self.resnet_channels,
+                rgb_channels=rgb_channels_per_scale,
+                with_uncertainty=False
+            )
+        else:
+            self.mconvs = MinkowskiEncoder(
+                self.resnet_channels,
+                with_uncertainty=False
+            )
 
     def init_weights(self):
         """Initialize network weights"""
@@ -288,196 +243,223 @@ class YOLOv8SAN01(nn.Module):
                     m.bias.data.zero_()
 
     def extract_features(self, x):
-        """🆕 Runtime adapter 생성을 포함한 Feature Extraction"""
+        """ResNet decoder 호환 feature extraction"""
         features = []
-        original_size = x.shape[-2:]  # (H, W)
         
         try:
-            # 1) YOLOv8 Backbone features 추출
-            feature_indices = [1, 2, 4, 6, 9]
-            actual_channels = []
-            
             current_x = x
+            feature_indices = [1, 2, 4, 6, 9]
+            
             for i, layer in enumerate(self.backbone):
                 try:
                     current_x = layer(current_x)
-                    if i in feature_indices:
-                        features.append(current_x.clone())
-                        actual_channels.append(current_x.shape[1])  # 실제 채널 기록
-                        if len(features) >= 5:
+                    
+                    # 튜플 반환 처리
+                    if isinstance(current_x, (tuple, list)):
+                        current_x = current_x[0]
+                    
+                    # Feature extraction points에서 추출
+                    if i in feature_indices and len(features) < 5:
+                        # 4D 텐서인지 확인
+                        if hasattr(current_x, 'shape') and len(current_x.shape) == 4:
+                            features.append(current_x)
+                        elif hasattr(current_x, 'shape') and len(current_x.shape) == 2:
                             break
-                except Exception as layer_error:
-                    print(f"⚠️ Error in layer {i}: {layer_error}")
-                    if features:
-                        features.append(features[-1])
-                        actual_channels.append(actual_channels[-1] if actual_channels else 64)
-                    else:
-                        dummy_feat = nn.functional.adaptive_avg_pool2d(x, (x.shape[-2]//2, x.shape[-1]//2))
-                        features.append(dummy_feat)
-                        actual_channels.append(dummy_feat.shape[1])
+                    
+                    if len(features) >= 5:
+                        break
+                        
+                except Exception as e:
+                    break
             
-            # 정확히 5개 확보
-            while len(features) < 5:
-                features.append(features[-1] if features else x)
-                actual_channels.append(actual_channels[-1] if actual_channels else x.shape[1])
-            features = features[:5]
-            actual_channels = actual_channels[:5]
-            
-            # 2) 선택적 Head Feature Processing
-            if self.use_head_features:
-                try:
-                    features = self.head_feature_extractor(features)
-                    # Head feature extractor는 고정된 출력 채널을 가짐
-                    actual_channels = self.head_feature_extractor.output_channels
-                except Exception as head_error:
-                    print(f"⚠️ Head Feature Extraction failed: {head_error}")
-                    print("🔧 Falling back to backbone features")
-            
-            # 3) 🆕 Lazy adapter 생성 (실제 채널에 맞춰)
-            self._setup_lazy_adapters(actual_channels)
-            
-            # 4) Feature adaptation
-            adapted_features = []
-            target_sizes = self._calculate_resnet_target_sizes(original_size)
-            
-            for i, (feat, adapter, target_size) in enumerate(zip(features, self.feature_adapters, target_sizes)):
-                try:
-                    # 목표 해상도로 리사이즈
-                    if feat.shape[-2:] != target_size:
-                        feat = nn.functional.interpolate(
+            # ResNet 스타일로 feature 재구성
+            if len(features) >= 3:
+                # 원본 입력 크기 기준으로 올바른 해상도 계산
+                input_h, input_w = x.shape[-2:]
+                
+                # ResNet encoder의 정확한 spatial hierarchy
+                target_sizes = [
+                    (input_h // 2, input_w // 2),    # 176x608  (1/2)
+                    (input_h // 4, input_w // 4),    # 88x304   (1/4) 
+                    (input_h // 8, input_w // 8),    # 44x152   (1/8)
+                    (input_h // 16, input_w // 16),  # 22x76    (1/16)
+                    (input_h // 32, input_w // 32),  # 11x38    (1/32)
+                ]
+                
+                resnet_features = []
+                
+                # 각 feature를 target size로 조정
+                for i, (feat, target_size) in enumerate(zip(features, target_sizes)):
+                    current_size = feat.shape[-2:]
+                    
+                    if current_size != target_size:
+                        # Interpolate to correct size
+                        adjusted_feat = torch.nn.functional.interpolate(
                             feat, size=target_size, mode='bilinear', align_corners=False
                         )
-                    
-                    # 채널 변환
-                    adapted_feat = adapter(feat)
-                    adapted_features.append(adapted_feat)
-                    
-                except Exception as adapter_error:
-                    print(f"⚠️ Adapter {i} failed: {adapter_error}")
-                    # 안전한 fallback
-                    dummy_feat = torch.zeros(feat.shape[0], self.num_ch_enc[i], *target_size, 
-                                           device=feat.device, dtype=feat.dtype)
-                    adapted_features.append(dummy_feat)
+                        resnet_features.append(adjusted_feat)
+                    else:
+                        resnet_features.append(feat)
+                
+                # 부족하면 마지막 feature를 downsampling해서 보충
+                while len(resnet_features) < 5:
+                    if resnet_features:
+                        last_feat = resnet_features[-1]
+                        target_size = target_sizes[len(resnet_features)]
+                        
+                        # 2x downsampling + 채널 증가
+                        downsampled = torch.nn.functional.avg_pool2d(last_feat, 2)
+                        
+                        # 채널 수 증가 (256 -> 512)
+                        if downsampled.shape[1] != self.yolo_channels[len(resnet_features)]:
+                            with torch.no_grad():
+                                channel_expander = nn.Conv2d(
+                                    downsampled.shape[1], 
+                                    self.yolo_channels[len(resnet_features)], 
+                                    1, bias=False
+                                ).to(downsampled.device)
+                                downsampled = channel_expander(downsampled)
+                        
+                        # Size 조정
+                        if downsampled.shape[-2:] != target_size:
+                            downsampled = torch.nn.functional.interpolate(
+                                downsampled, size=target_size, mode='bilinear', align_corners=False
+                            )
+                        
+                        resnet_features.append(downsampled)
+                    else:
+                        break
+                
+                features = resnet_features[:5]
             
-            return adapted_features
+            else:
+                # Fallback: 입력에서 순차적으로 ResNet-style downsampling
+                print("🔧 Using fallback ResNet-style feature generation")
+                features = []
+                input_h, input_w = x.shape[-2:]
+                
+                for i in range(5):
+                    scale_factor = 2 ** (i + 1)
+                    target_h = input_h // scale_factor
+                    target_w = input_w // scale_factor
+                    
+                    # Simple downsampling
+                    downsampled = torch.nn.functional.avg_pool2d(x, scale_factor)
+                    
+                    # Resize to exact target if needed
+                    if downsampled.shape[-2:] != (target_h, target_w):
+                        downsampled = torch.nn.functional.interpolate(
+                            downsampled, size=(target_h, target_w), mode='bilinear', align_corners=False
+                        )
+                    
+                    # Channel adjustment
+                    if downsampled.shape[1] != self.yolo_channels[i]:
+                        with torch.no_grad():
+                            channel_adjuster = nn.Conv2d(
+                                downsampled.shape[1], self.yolo_channels[i], 1, bias=False
+                            ).to(x.device)
+                            downsampled = channel_adjuster(downsampled)
+                    
+                    features.append(downsampled)
+            
+            return features
             
         except Exception as e:
-            print(f"❌ Feature extraction failed: {e}")
-            # 완전한 fallback
-            target_sizes = self._calculate_resnet_target_sizes(original_size)
-            dummy_features = []
-            for i, target_size in enumerate(target_sizes):
-                dummy_feat = torch.zeros(x.shape[0], self.num_ch_enc[i], *target_size, 
-                                       device=x.device, dtype=x.dtype)
-                dummy_features.append(dummy_feat)
-            return dummy_features
-
-    def _calculate_resnet_target_sizes(self, original_size):
-        """ResNet DepthDecoder 호환 target sizes 계산"""
-        H, W = original_size
-        
-        # ResNet encoder의 정확한 해상도 피라미드
-        target_sizes = [
-            (H // 2, W // 2),    # feat0: H/2, W/2   (conv1+maxpool)
-            (H // 4, W // 4),    # feat1: H/4, W/4   (layer1)
-            (H // 8, W // 8),    # feat2: H/8, W/8   (layer2)
-            (H // 16, W // 16),  # feat3: H/16, W/16 (layer3)
-            (H // 32, W // 32),  # feat4: H/32, W/32 (layer4)
-        ]
-        
-        return target_sizes
+            # 완전 Fallback
+            features = []
+            input_h, input_w = x.shape[-2:]
+            
+            for i in range(5):
+                scale_factor = 2 ** (i + 1)
+                height = input_h // scale_factor
+                width = input_w // scale_factor
+                channels = self.yolo_channels[i]
+                
+                dummy_feat = torch.randn(x.shape[0], channels, height, width, device=x.device)
+                features.append(dummy_feat)
+            
+            return features
 
     def run_network(self, rgb, input_depth=None):
-        """
-        🆕 PackNet-SAN과 동일한 network execution
-        """
-        try:
-            # YOLOv8에서 ResNet 호환 feature pyramid 추출
-            skip_features = self.extract_features(rgb)
+        """Network execution"""
+        # YOLOv8 feature extraction
+        yolo_features = self.extract_features(rgb)
+        
+        # Feature adaptation to ResNet format
+        adapted_features = []
+        for i, (feat, adapter) in enumerate(zip(yolo_features, self.feature_adapters)):
+            adapted_feat = adapter(feat)
+            adapted_features.append(adapted_feat)
+        
+        # LiDAR integration
+        if input_depth is not None:
+            self.mconvs.prep(input_depth)
             
-            # 🆕 PackNet-SAN과 동일한 LiDAR 처리
-            if input_depth is not None:
-                self.mconvs.prep(input_depth)
-                
-                fused_features = []
-                for i, feat in enumerate(skip_features):
-                    if self.use_film and i in self.film_scales:
-                        # FiLM이 활성화된 스케일에서만 depth-aware modulation
-                        result = self.mconvs(feat)
-                        
-                        if isinstance(result, tuple) and len(result) == 3:
-                            sparse_feat, gamma, beta = result
-                            # FiLM modulation 적용
-                            modulated_feat = gamma * feat + beta
-                            fusion_weight = torch.sigmoid(self.weight[i])
-                            fused_feat = (fusion_weight * modulated_feat + 
-                                         (1 - fusion_weight) * sparse_feat + 
-                                         self.bias[i].view(1, 1, 1, 1))
-                        else:
-                            sparse_feat = result
-                            fusion_weight = torch.sigmoid(self.weight[i])
-                            fused_feat = (fusion_weight * feat + 
-                                         (1 - fusion_weight) * sparse_feat + 
-                                         self.bias[i].view(1, 1, 1, 1))
+            fused_features = []
+            for i, feat in enumerate(adapted_features):
+                if self.use_film and i in self.film_scales:
+                    result = self.mconvs(feat)
+                    
+                    if isinstance(result, tuple) and len(result) == 3:
+                        sparse_feat, gamma, beta = result
+                        modulated_feat = gamma * feat + beta
+                        fusion_weight = torch.sigmoid(self.weight[i])
+                        fused_feat = (fusion_weight * modulated_feat + 
+                                     (1 - fusion_weight) * sparse_feat + 
+                                     self.bias[i].view(1, 1, 1, 1))
                     else:
-                        # 🆕 FiLM이 비활성화된 스케일에서도 LiDAR 융합은 수행
-                        sparse_feat = self.mconvs(feat)
+                        sparse_feat = result
                         fusion_weight = torch.sigmoid(self.weight[i])
                         fused_feat = (fusion_weight * feat + 
                                      (1 - fusion_weight) * sparse_feat + 
                                      self.bias[i].view(1, 1, 1, 1))
-                    
-                    fused_features.append(fused_feat)
+                else:
+                    sparse_feat = self.mconvs(feat)
+                    fusion_weight = torch.sigmoid(self.weight[i])
+                    fused_feat = (fusion_weight * feat + 
+                                 (1 - fusion_weight) * sparse_feat + 
+                                 self.bias[i].view(1, 1, 1, 1))
                 
-                skip_features = fused_features
+                fused_features.append(fused_feat)
             
-            # ResNet DepthDecoder 사용
-            inv_depths_dict = self.decoder(skip_features)
-            
-            # Convert to list format
-            if self.training:
-                inv_depths = [
-                    inv_depths_dict[("disp", 0)],
-                    inv_depths_dict[("disp", 1)],
-                    inv_depths_dict[("disp", 2)],
-                    inv_depths_dict[("disp", 3)],
-                ]
-            else:
-                inv_depths = [inv_depths_dict[("disp", 0)]]
-            
-            return inv_depths, skip_features
-            
-        except Exception as e:
-            print(f"❌ Network execution failed: {e}")
-            # 완전한 fallback
-            dummy_depth = torch.ones(rgb.shape[0], 1, rgb.shape[2], rgb.shape[3], 
-                                   device=rgb.device, dtype=rgb.dtype) * 0.1
-            return [dummy_depth], []
+            adapted_features = fused_features
+        
+        # Decode to get inverse depth maps
+        inv_depths_dict = self.decoder(adapted_features)
+        
+        # Convert to list format
+        if self.training:
+            inv_depths = [
+                inv_depths_dict[("disp", 0)],
+                inv_depths_dict[("disp", 1)],
+                inv_depths_dict[("disp", 2)],
+                inv_depths_dict[("disp", 3)],
+            ]
+        else:
+            inv_depths = [inv_depths_dict[("disp", 0)]]
+        
+        return inv_depths, adapted_features
 
     def forward(self, rgb, input_depth=None, **kwargs):
-        """
-        🆕 PackNet-SAN과 완전히 동일한 forward pass
-        """
+        """Forward pass"""
         if not self.training:
-            # 🆕 Inference 모드: RGB+LiDAR 사용
             inv_depths, _ = self.run_network(rgb, input_depth)
             return {'inv_depths': inv_depths}
 
         output = {}
         
-        # 🆕 Training 모드: PackNet-SAN과 동일한 로직
-        # 1) RGB-only forward pass
+        # RGB-only forward pass
         inv_depths_rgb, skip_feat_rgb = self.run_network(rgb)
         output['inv_depths'] = inv_depths_rgb
         
         if input_depth is None:
             return {'inv_depths': inv_depths_rgb}
         
-        # 2) RGB+LiDAR forward pass
+        # RGB+D forward pass
         inv_depths_rgbd, skip_feat_rgbd = self.run_network(rgb, input_depth)
         output['inv_depths_rgbd'] = inv_depths_rgbd
         
-        # 3) 🆕 PackNet-SAN과 동일한 feature consistency loss
+        # Consistency loss
         if len(skip_feat_rgbd) == len(skip_feat_rgb) and len(skip_feat_rgb) > 0:
             feature_weights = torch.softmax(torch.abs(self.weight), dim=0)
             weighted_loss = sum([
