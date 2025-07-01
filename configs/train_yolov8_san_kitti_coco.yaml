@@ -12,19 +12,20 @@ model:
             lr: 0.0001
     scheduler:
         name: 'StepLR'
-        step_size: 30
+        step_size: 15
         gamma: 0.5
     depth_net:
-        name: 'ResNetSAN01'
-        version: '18A'
+        name: 'YOLOv8SAN01'
+        variant: 's'
         dropout: 0.1
-        # 🔧 기존 구조로 설정
-        use_film: false           # 체크포인트와 동일하게
-        film_scales: [0]         # 체크포인트와 동일하게
-        use_enhanced_lidar: false  # ❌ Enhanced 비활성화
+        use_film: false
+        film_scales: [0]
+        use_enhanced_lidar: false
+        use_head_features: true        # ImageNet 모델은 detection head 없음
+        use_imagenet_pretrained: false   # 🆕 ImageNet classification model 사용
     params:
         crop: 'garg'
-        min_depth: 0.0
+        min_depth: 0.1
         max_depth: 80.0
         scale_output: 'top-center'
 
@@ -46,25 +47,18 @@ datasets:
         split: ['data_splits/eigen_test_files.txt']
         input_depth_type: ['velodyne','']
         depth_type: ['groundtruth','groundtruth']
-    test:
-        dataset: ['KITTI']
-        path: ['/data/datasets/KITTI_raw']
-        split: ['data_splits/eigen_test_files.txt']
-        input_depth_type: ['velodyne','']
-        depth_type: ['groundtruth','groundtruth']
 
-# 🆕 중간 평가 설정
 arch:
     seed: 42
     clip_grad: 10.0
-    max_epochs: 30
+    max_epochs: 15
     eval_during_training: true
     eval_progress_interval: 0.5
     eval_subset_size: 100
 
 checkpoint:
-    filepath: 'checkpoints/resnetsan01-ssi-silog-tiny/'
+    filepath: 'checkpoints/yolov8san01_imagenet-tiny/'
     save_top_k: -1
 
 save:
-    folder: 'outputs/resnetsan01-ssi-silog-tiny/'
+    folder: 'outputs/yolov8san01_imagenet-tiny/'

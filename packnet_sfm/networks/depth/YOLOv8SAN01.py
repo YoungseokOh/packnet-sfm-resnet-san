@@ -120,12 +120,12 @@ class C2f(nn.Module):
 
 class YOLOv8SAN01(nn.Module):
     """
-    🆕 YOLOv8-based SAN network (간소화된 버전)
+    🆕 YOLOv8-based SAN network with Head Features and ImageNet support
     """
     def __init__(self, variant='s', use_film=False, film_scales=[0], 
-                 use_head_features=False, use_imagenet_pretrained=False, **kwargs):
+             use_head_features=False, use_imagenet_pretrained=False, **kwargs):
         super().__init__()
-        
+    
         self.variant = variant
         self.use_head_features = use_head_features
         self.use_imagenet_pretrained = use_imagenet_pretrained
@@ -142,7 +142,7 @@ class YOLOv8SAN01(nn.Module):
             else:
                 model_name = f'yolov8{variant}.pt'
                 print(f"🔄 Loading COCO detection model: {model_name}")
-            
+        
             temp_model = YOLO(model_name)
             self.backbone = temp_model.model.model
             del temp_model
@@ -154,7 +154,7 @@ class YOLOv8SAN01(nn.Module):
             self.backbone = temp_model.model.model
             del temp_model
             self.use_imagenet_pretrained = False
-        
+    
         # ResNet 호환 채널 구조 (고정)
         self.resnet_channels = [64, 64, 128, 256, 512]
         
@@ -168,27 +168,65 @@ class YOLOv8SAN01(nn.Module):
         }
         self.yolo_channels = yolo_channel_configs.get(variant, [64, 64, 128, 256, 256])
         
+        # 🔧 실제 추출 테스트를 통해 정확한 채널 수 확인
+        print(f"🔧 Testing actual YOLOv8 backbone channels...")
+        with torch.no_grad():
+            dummy_input = torch.randn(1, 3, 352, 1216)
+            actual_channels = self._test_backbone_channels(dummy_input)
+    
+        print(f"🔧 Actual backbone channels: {actual_channels}")
+        print(f"🔧 Expected YOLO channels: {self.yolo_channels}")
+    
+        # 🔧 실제 채널로 업데이트
+        if len(actual_channels) == 5:
+            self.yolo_channels = actual_channels
+            print(f"✅ Updated to actual channels: {self.yolo_channels}")
+    
+        # 🔧 Head Feature Extractor 사용 시 채널 구성 변경
+        if self.use_head_features:
+            try:
+                # Head Feature Extractor 초기화
+                self.head_feature_extractor = YOLOv8HeadFeatureExtractor(
+                    self.yolo_channels, variant=variant
+                )
+                # 실제 Head Feature Extractor의 출력 채널 사용
+                adapter_input_channels = self.head_feature_extractor.output_channels
+                print(f"🎯 Head Feature Extractor output channels: {adapter_input_channels}")
+                
+            except Exception as head_error:
+                print(f"❌ Head Feature Extractor failed: {head_error}")
+                print("🔧 Falling back to backbone features")
+                self.use_head_features = False
+                adapter_input_channels = self.yolo_channels
+        else:
+            adapter_input_channels = self.yolo_channels
+    
+        print(f"🔧 Final adapter input channels: {adapter_input_channels}")
+        print(f"🔧 ResNet target channels: {self.resnet_channels}")
+    
         # Feature adapter 생성
         self.feature_adapters = nn.ModuleList()
-        for i, (yolo_ch, resnet_ch) in enumerate(zip(self.yolo_channels, self.resnet_channels)):
-            if yolo_ch != resnet_ch:
+        for i, (input_ch, resnet_ch) in enumerate(zip(adapter_input_channels, self.resnet_channels)):
+            if input_ch != resnet_ch:
                 adapter = nn.Sequential(
-                    nn.Conv2d(yolo_ch, resnet_ch, kernel_size=1, bias=False),
+                    nn.Conv2d(input_ch, resnet_ch, kernel_size=1, bias=False),
                     nn.BatchNorm2d(resnet_ch),
                     nn.ReLU(inplace=True)
                 )
+                print(f"   Adapter {i}: {input_ch} -> {resnet_ch} channels")
             else:
                 adapter = nn.Identity()
+                print(f"   Adapter {i}: {input_ch} channels (no change)")
             self.feature_adapters.append(adapter)
-        
+    
         # ResNet DepthDecoder
         self.decoder = DepthDecoder(num_ch_enc=self.resnet_channels)
-        
+    
         # SAN 설정
         self.use_film = use_film
         self.film_scales = film_scales
         self.use_enhanced_lidar = kwargs.get('use_enhanced_lidar', False)
-        
+    
         # FiLM configuration
         rgb_channels_per_scale = None
         if use_film:
@@ -198,10 +236,10 @@ class YOLOv8SAN01(nn.Module):
                     rgb_channels_per_scale.append(self.resnet_channels[i])
                 else:
                     rgb_channels_per_scale.append(0)
-        
+    
         # Minkowski encoder 설정
         self._setup_minkowski_encoder(rgb_channels_per_scale)
-        
+    
         # Learnable fusion weights
         self.weight = torch.nn.parameter.Parameter(
             torch.ones(5) * 0.5, requires_grad=True
@@ -209,14 +247,54 @@ class YOLOv8SAN01(nn.Module):
         self.bias = torch.nn.parameter.Parameter(
             torch.zeros(5), requires_grad=True
         )
-        
+    
         print(f"🎯 Final configuration:")
         print(f"   YOLOv8 channels: {self.yolo_channels}")
+        print(f"   Adapter input: {adapter_input_channels}")
         print(f"   ResNet channels: {self.resnet_channels}")
         print(f"   FiLM enabled: {use_film}")
         print(f"   FiLM scales: {film_scales}")
-        
+    
         self.init_weights()
+
+    def _test_backbone_channels(self, dummy_input):
+        """실제 backbone에서 추출되는 채널 수를 테스트"""
+        features = []
+        current_x = dummy_input
+        feature_indices = [1, 2, 4, 6, 9]
+        
+        try:
+            for i, layer in enumerate(self.backbone):
+                try:
+                    current_x = layer(current_x)
+                    
+                    # 튜플 반환 처리
+                    if isinstance(current_x, (tuple, list)):
+                        current_x = current_x[0]
+                    
+                    # Feature extraction points에서 추출
+                    if i in feature_indices and len(features) < 5:
+                        if hasattr(current_x, 'shape') and len(current_x.shape) == 4:
+                            features.append(current_x.shape[1])  # 채널 수만 저장
+                        elif hasattr(current_x, 'shape') and len(current_x.shape) == 2:
+                            break
+                    
+                    if len(features) >= 5:
+                        break
+                        
+                except Exception as e:
+                    break
+    
+        except Exception as e:
+            print(f"⚠️ Backbone test failed: {e}")
+            return self.yolo_channels  # fallback
+    
+        # 5개 미만이면 기본값 사용
+        if len(features) < 5:
+            print(f"⚠️ Only extracted {len(features)} features, using default channels")
+            return self.yolo_channels
+    
+        return features
 
     def _setup_minkowski_encoder(self, rgb_channels_per_scale):
         """Minkowski encoder 설정"""
@@ -243,7 +321,7 @@ class YOLOv8SAN01(nn.Module):
                     m.bias.data.zero_()
 
     def extract_features(self, x):
-        """ResNet decoder 호환 feature extraction"""
+        """ResNet decoder 호환 feature extraction with Head Features support"""
         features = []
         
         try:
@@ -260,10 +338,10 @@ class YOLOv8SAN01(nn.Module):
                     
                     # Feature extraction points에서 추출
                     if i in feature_indices and len(features) < 5:
-                        # 4D 텐서인지 확인
                         if hasattr(current_x, 'shape') and len(current_x.shape) == 4:
                             features.append(current_x)
                         elif hasattr(current_x, 'shape') and len(current_x.shape) == 2:
+                            # ImageNet classification model의 경우 2D 출력에서 중단
                             break
                     
                     if len(features) >= 5:
@@ -334,7 +412,6 @@ class YOLOv8SAN01(nn.Module):
             
             else:
                 # Fallback: 입력에서 순차적으로 ResNet-style downsampling
-                print("🔧 Using fallback ResNet-style feature generation")
                 features = []
                 input_h, input_w = x.shape[-2:]
                 
@@ -362,9 +439,18 @@ class YOLOv8SAN01(nn.Module):
                     
                     features.append(downsampled)
             
-            return features
+            # 🆕 Head Feature Extractor 적용 (선택적)
+            if self.use_head_features and hasattr(self, 'head_feature_extractor'):
+                try:
+                    head_features = self.head_feature_extractor(features[:5])
+                    features = head_features
+                    
+                except Exception as head_error:
+                    print(f"❌ Head Feature Extractor failed: {head_error}")
+            return features[:5]
             
         except Exception as e:
+            print(f"❌ Feature extraction failed: {e}")
             # 완전 Fallback
             features = []
             input_h, input_w = x.shape[-2:]

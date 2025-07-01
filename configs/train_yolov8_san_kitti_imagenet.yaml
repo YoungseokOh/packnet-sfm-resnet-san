@@ -57,8 +57,8 @@ arch:
     eval_subset_size: 100
 
 checkpoint:
-    filepath: 'checkpoints/yolov8san01_imagenet/'
+    filepath: 'checkpoints/yolov8san01_imagenet-tiny/'
     save_top_k: -1
 
 save:
-    folder: 'outputs/yolov8san01_imagenet/'
+    folder: 'outputs/yolov8san01_imagenet-tiny/'

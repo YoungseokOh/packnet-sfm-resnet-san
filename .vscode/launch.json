@@ -20,7 +20,7 @@
             // 필요에 따라 args 를 주석 해제/수정하세요:
             "args": 
             [
-                "configs/train_yolov8_san_kitti_imagenet.yaml"
+                "configs/train_yolov8_san_kitti_coco.yaml"
             ],
             // "args": [
             //     "--checkpoint",
