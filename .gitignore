@@ -24,12 +24,19 @@ parts/
 sdist/
 var/
 wheels/
+enhanced_analysis_results/
 *.egg-info/
 .installed.cfg
 *.egg
 *.pt
 *.ckpt
+*.aiwbin
+*.onnx
+*.npy
+*.txt
+*.png
 client.py
+client_infer.py
 MANIFEST
 
 # PyInstaller

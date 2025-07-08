@@ -20,8 +20,9 @@ model:
         dropout: 0.1
         use_film: false
         film_scales: [0]
-        use_enhanced_lidar: false
-        use_head_features: true        # ImageNet 모델은 detection head 없음
+        use_enhanced_lidar: true
+        use_neck_features: false       # ImageNet 모델은 detection head 없음
+        use_depth_neck: true
         use_imagenet_pretrained: false   # 🆕 ImageNet classification model 사용
     params:
         crop: 'garg'
@@ -57,8 +58,8 @@ arch:
     eval_subset_size: 100
 
 checkpoint:
-    filepath: 'checkpoints/yolov8san01_imagenet-tiny/'
+    filepath: 'checkpoints/yolov8san01_use_depth_neck/'
     save_top_k: -1
 
 save:
-    folder: 'outputs/yolov8san01_imagenet-tiny/'
+    folder: 'outputs/yolov8san01_use_depth_neck/'

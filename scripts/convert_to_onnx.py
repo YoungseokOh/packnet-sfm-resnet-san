@@ -106,7 +106,7 @@ def load_model_simple(checkpoint_path):
             depth_state[new_key] = value
     
     # Load state dict
-    missing_keys, unexpected_keys = depth_net.load_state_dict(depth_state, strict=False)
+    missing_keys, unexpected_keys = depth_net.load_state_dict(depth_state, strict=True)
     
     if missing_keys:
         print(f"⚠️ Missing keys: {len(missing_keys)}")

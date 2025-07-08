@@ -25,7 +25,7 @@ class ResNetSAN01(nn.Module):
     kwargs : dict
         Extra parameters
     """
-    def __init__(self, dropout=None, version=None, use_film=True, film_scales=[0], **kwargs):
+    def __init__(self, dropout=None, version=None, use_film=False, film_scales=[0], **kwargs):
         super().__init__()
         
         # 🆕 기존 파라미터만 사용

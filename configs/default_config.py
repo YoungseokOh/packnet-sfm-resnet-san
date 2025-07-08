@@ -6,7 +6,7 @@ from yacs.config import CfgNode as CN
 ########################################################################################################################
 cfg = CN()
 cfg.name = ''       # Run name
-cfg.debug = False   # Debugging flag
+cfg.debug = True   # Debugging flag
 
 ########################################################################################################################
 ### MODEL
@@ -56,8 +56,9 @@ cfg.model.depth_net.use_enhanced_lidar = False  # Enable enhanced LiDAR processi
 
 # 🆕 YOLOv8SAN01 전용 파라미터 (선택적으로만 사용)
 cfg.model.depth_net.variant = 's'           # YOLOv8 variant (n, s, m, l, x) - YOLOv8SAN01에서만 사용
-cfg.model.depth_net.use_head_features = False
+cfg.model.depth_net.use_neck_features = False
 cfg.model.depth_net.use_imagenet_pretrained = False  # Enable enhanced LiDAR processing in YOLOv8SAN01
+cfg.model.depth_net.use_depth_neck = False
 ########################################################################################################################
 ### MODEL.POSE_NET
 ########################################################################################################################
