@@ -19,14 +19,46 @@
         //     "args": 
         //     [
         //         "--checkpoint",
-        //         "/workspace/packnet-sfm/resnetsan01_e20_no_elu_no_dropout_imagenet_floatfunc.ckpt",
+        //         "/workspace/packnet-sfm/aiwbin_test/resnetsan01-e3_quantized_Floatfunc.ckpt",
         //         "--input",
-        //         "/workspace/packnet-sfm/sample_kitti.png",
+        //         "/workspace/packnet-sfm/aiwbin_test/sample_kitti.png",
         //         "--output",
-        //         "resnetsan01_e20_no_elu_no_dropout_imagenet_floatfunc_gpu.png",
+        //         "aiwbin_test/resnetsan01-e3_quantized_Floatfunc_gpu.png",
         //         "--image_shape",
         //         "352",
         //         "1216"
+        //     ],
+        //     "stopOnEntry": false,
+        //     "justMyCode": false
+        // },
+
+
+        // {
+        //     "name": "Debug eval_npu.py",
+        //     "type": "debugpy", 
+        //     "request": "launch",
+        //     "program": "${workspaceFolder}/scripts/eval_npu.py",
+        //     "console": "integratedTerminal",
+        //     "env": 
+        //     {
+        //         "PYTHONPATH": "${workspaceFolder}",
+        //         "PYTHONWARNINGS": "ignore::UserWarning"
+        //     },    
+        //     "cwd": "${workspaceFolder}",
+        //     "args": 
+        //     [
+        //         "--checkpoint",
+        //         "aiwbin_test/resnetsan01-e3_quantized_Floatfunc.ckpt",
+        //         "--config",
+        //         "configs/train_resnet_san_kitti.yaml",
+        //         "--model",
+        //         "aiwbin_test/resnetsan01-e3_quantized_Floatfunc_requant_auto.aiwbin",
+        //         "--server",
+        //         "http://192.168.3.142:7999/predict",
+        //         "--board",
+        //         "apache6",
+        //         "--save_results",
+
         //     ],
         //     "stopOnEntry": false,
         //     "justMyCode": false
@@ -40,7 +72,7 @@
             // 실행할 스크립트 파일을 하나만 주석 해제하세요:
             "program": "${workspaceFolder}/scripts/train.py",
             // "program": "${workspaceFolder}/scripts/eval.py",
-            // "program": "${file}",  
+            // "program": "${file}",
             "console": "integratedTerminal",
             "env": 
             {
@@ -49,34 +81,29 @@
             },    
             "cwd": "${workspaceFolder}",
             // 필요에 따라 args 를 주석 해제/수정하세요:
+
+            // Train
             "args": 
             [
-                "configs/train_resnet_san_kitti_tiny.yaml"
+                // "configs/train_resnet_san_kitti.yaml"
+                "configs/train_resnet18_san_advanced_aug.yaml"
             ],
         },
-        //     // "args": 
-        //     // [
-        //     //     "--kitti_dir",
-        //     //     "/data/datasets/KITTI_raw/2011_09_26/2011_09_26_drive_0027_sync/image_02/data",
-        //     //     "--width",
-        //     //     "1216",
-        //     //     "--height",
-        //     //     "352",
-        //     //     "--output",
-        //     //     "sample_kitti.png"
-        //     // ],
-               // },
-        //     // "args": 
-        //     // [
-        //     //     "--checkpoint",
-        //     //     "/workspace/packnet-sfm/checkpoints/resnetsan01-ssi-silog/from_worker6/resnet_e29_ssi+silog.ckpt",
-        //     //     "--config", 
-        //     //     "configs/train_resnet_san_kitti.yaml"
-        //     // ],
-        //     // "args": [
-        //     //     "--results-dir",
-        //     //     "checkpoints/.../evaluation_results"
-        //     // ],
+               
+            // Eval
+            // "args": 
+            // [
+            //     "--checkpoint",
+            //     "/workspace/packnet-sfm/aiwbin_test/resnetsan01-e3_quantized_Floatfunc.ckpt",
+            //     "--config", 
+            //     "configs/train_resnet_san_kitti.yaml"
+            // ],
+
+            // Eval NPU
+            // "args": [
+            //     "--results-dir",
+            //     "checkpoints/.../evaluation_results"
+            // ],
         // },
 
 
@@ -94,11 +121,12 @@
         //     // 실행 시 args 가 필요하면 아래 주석 해제
         //     "args": 
         //     [   "--checkpoint",
-        //         "/workspace/packnet-sfm/resnetsan01_e20_no_elu_no_dropout_imagenet_floatfunc.ckpt",
+        //         "/workspace/packnet-sfm/aiwbin_test/resnetsan01-e3_quantized_Floatfunc.ckpt",
         //          "--output",
-        //         "/workspace/packnet-sfm//resnetsan01_e20_no_elu_no_dropout_imagenet_floatfunc.onnx",
+        //         "/workspace/packnet-sfm/aiwbin_test/resnetsan01-e3_quantized_Floatfunc.onnx",
         //     ]   
         // }
+
 
         // python scripts/eval_pytorch_onnx_comparison.py     
         // --checkpoint /workspace/packnet-sfm/checkpoints/.../epoch=20_... .ckpt
@@ -106,5 +134,7 @@
         // --data_path /data/datasets/KITTI_raw 
         // --split_file /data/datasets/KITTI_raw/data_splits/eigen_test_files.txt
         // --use_gt_scale
+
+
     ]
 }

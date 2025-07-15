@@ -126,6 +126,31 @@ cfg.datasets.augmentation.jittering = (0.2, 0.2, 0.2, 0.05)     # Color jitterin
 cfg.datasets.augmentation.crop_train_borders = ()               # Crop training borders
 cfg.datasets.augmentation.crop_eval_borders = ()                # Crop evaluation borders
 
+# 🆕 Advanced augmentation 설정 추가
+cfg.datasets.augmentation.randaugment = CN()
+cfg.datasets.augmentation.randaugment.enabled = False           # Enable RandAugment
+cfg.datasets.augmentation.randaugment.n = 9                     # Number of augmentation operations
+cfg.datasets.augmentation.randaugment.m = 0.5                   # Magnitude (0-1)
+cfg.datasets.augmentation.randaugment.prob = 0.5                # Probability of applying RandAugment
+
+cfg.datasets.augmentation.random_erasing = CN()
+cfg.datasets.augmentation.random_erasing.enabled = False        # Enable RandomErasing
+cfg.datasets.augmentation.random_erasing.probability = 0.1      # Probability of applying RandomErasing
+cfg.datasets.augmentation.random_erasing.sl = 0.02              # Minimum erased area ratio
+cfg.datasets.augmentation.random_erasing.sh = 0.4               # Maximum erased area ratio
+cfg.datasets.augmentation.random_erasing.r1 = 0.3               # Minimum aspect ratio
+cfg.datasets.augmentation.random_erasing.mean = [0.485, 0.456, 0.406]  # Fill values for erased regions
+
+cfg.datasets.augmentation.mixup = CN()
+cfg.datasets.augmentation.mixup.enabled = False                 # Enable MixUp
+cfg.datasets.augmentation.mixup.alpha = 0.2                     # Beta distribution parameter
+cfg.datasets.augmentation.mixup.prob = 0.5                      # Probability of applying MixUp
+
+cfg.datasets.augmentation.cutmix = CN()
+cfg.datasets.augmentation.cutmix.enabled = False                # Enable CutMix
+cfg.datasets.augmentation.cutmix.alpha = 1.0                    # Beta distribution parameter
+cfg.datasets.augmentation.cutmix.prob = 0.5                     # Probability of applying CutMix
+
 ########################################################################################################################
 ### DATASETS.TRAIN
 ########################################################################################################################

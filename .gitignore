@@ -14,6 +14,7 @@ dist/
 downloads/
 outputs/
 checkpoints/
+aiwbin_test/
 analysis*/
 eggs/
 onnx/
@@ -37,6 +38,7 @@ enhanced_analysis_results/
 *.png
 client.py
 client_infer.py
+eval_npu.py
 MANIFEST
 
 # PyInstaller

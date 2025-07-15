@@ -6,6 +6,8 @@ import time
 import random
 import numpy as np
 import torch
+import os
+from collections import OrderedDict
 from torch.utils.data import ConcatDataset, DataLoader
 
 from packnet_sfm.datasets.transforms import get_transforms
@@ -19,6 +21,14 @@ from packnet_sfm.utils.reduce import all_reduce_metrics, reduce_dict, \
     create_dict, average_loss_and_metrics
 from packnet_sfm.utils.save import save_depth
 from packnet_sfm.models.model_utils import stack_batch
+
+
+# 🆕 Advanced augmentation import (선택적)
+try:
+    from packnet_sfm.datasets.augmentations_kitti_compatible import create_kitti_advanced_collate_fn
+    ADVANCED_COLLATE_AVAILABLE = True
+except ImportError:
+    ADVANCED_COLLATE_AVAILABLE = False
 
 
 class ModelWrapper(torch.nn.Module):
@@ -84,19 +94,29 @@ class ModelWrapper(torch.nn.Module):
         # Prepare datasets
         print0(pcolor('### Preparing Datasets', 'green'))
 
-        augmentation = self.config.datasets.augmentation
+        # 🔧 augmentation 설정을 제대로 전달
+        augmentation_config = self.config.datasets.augmentation
+        
         # Setup train dataset (requirements are given by the model itself)
         self.train_dataset = setup_dataset(
             self.config.datasets.train, 'train',
-            self.model.train_requirements, **augmentation)
+            self.model.train_requirements, 
+            augmentation=augmentation_config,  # 🆕 명시적으로 augmentation 전달
+            **augmentation_config)  # 🆕 기존 방식도 유지
+        
         # Setup validation dataset
         self.validation_dataset = setup_dataset(
             self.config.datasets.validation, 'validation',
-            validation_requirements, **augmentation)
+            validation_requirements, 
+            augmentation=augmentation_config,  # 🆕 명시적으로 augmentation 전달
+            **augmentation_config)  # 🆕 기존 방식도 유지
+        
         # Setup test dataset
         self.test_dataset = setup_dataset(
             self.config.datasets.test, 'test',
-            test_requirements, **augmentation)
+            test_requirements, 
+            augmentation=augmentation_config,  # 🆕 명시적으로 augmentation 전달
+            **augmentation_config)  # 🆕 기존 방식도 유지
 
     @property
     def depth_net(self):
@@ -630,6 +650,7 @@ def get_datasampler(dataset, mode):
 def setup_dataloader(datasets, config, mode):
     """
     Create a dataloader class
+    🆕 Enhanced to support advanced augmentation collate functions
 
     Parameters
     ----------
@@ -645,9 +666,34 @@ def setup_dataloader(datasets, config, mode):
     dataloaders : list of Dataloader
         List of created dataloaders for each input dataset
     """
-    return [(DataLoader(dataset,
-                        batch_size=config.batch_size, shuffle=False,
-                        pin_memory=False, num_workers=config.num_workers,
-                        worker_init_fn=worker_init_fn,
-                        sampler=get_datasampler(dataset, mode))
-             ) for dataset in datasets]
+    
+    # 🆕 Advanced augmentation collate function (선택적)
+    collate_fn = None
+    if (mode == 'train' and 
+        hasattr(config, 'augmentation') and 
+        ADVANCED_COLLATE_AVAILABLE):
+        collate_fn = create_kitti_advanced_collate_fn(config.augmentation)
+        print("🎨 Using advanced augmentation collate function")
+    
+    # 🔧 Sampler와 shuffle 충돌 해결
+    dataloaders = []
+    for dataset in datasets:
+        # Sampler 설정
+        sampler = get_datasampler(dataset, mode)
+        
+        # Sampler가 있으면 shuffle=False, 없으면 shuffle=(mode=='train')
+        shuffle_enabled = (mode == 'train') and (sampler is None)
+        
+        dataloader = DataLoader(
+            dataset,
+            batch_size=config.batch_size, 
+            shuffle=shuffle_enabled,  # 🔧 수정된 부분
+            pin_memory=False, 
+            num_workers=config.num_workers,
+            worker_init_fn=worker_init_fn,
+            sampler=sampler,
+            collate_fn=collate_fn
+        )
+        dataloaders.append(dataloader)
+    
+    return dataloaders
