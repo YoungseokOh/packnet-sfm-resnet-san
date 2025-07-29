@@ -4,6 +4,7 @@ import torch.multiprocessing as mp
 mp.set_start_method('spawn', force=True)
 
 import argparse
+import os
 
 from packnet_sfm.models.model_wrapper import ModelWrapper
 from packnet_sfm.models.model_checkpoint import ModelCheckpoint
@@ -12,7 +13,7 @@ from packnet_sfm.trainers.base_trainer import BaseTrainer
 from packnet_sfm.utils.config import parse_train_file
 from packnet_sfm.utils.load import set_debug, filter_args_create
 from packnet_sfm.utils.horovod import hvd_init, rank
-from packnet_sfm.loggers import WandbLogger
+from packnet_sfm.loggers import WandbLogger, TensorboardLogger
 
 
 def parse_args():
@@ -45,16 +46,28 @@ def train(file):
     # Set debug if requested
     set_debug(config.debug)
 
+    # Loggers list
+    loggers = []
+
     # Wandb Logger
-    logger = None if config.wandb.dry_run or rank() > 0 \
-        else filter_args_create(WandbLogger, config.wandb)
+    if not config.wandb.dry_run and rank() == 0:
+        loggers.append(filter_args_create(WandbLogger, config.wandb))
+
+    # Tensorboard Logger
+    if not config.tensorboard.dry_run and rank() == 0:
+        # Ensure log_dir is set for Tensorboard
+        if config.tensorboard.log_dir == '':
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            config.tensorboard.log_dir = os.path.join(config.save.folder, f'tensorboard_logs_{timestamp}')
+        loggers.append(TensorboardLogger(log_dir=config.tensorboard.log_dir, config=config.tensorboard))
 
     # model checkpoint
     checkpoint = None if config.checkpoint.filepath == '' or rank() > 0 else \
         filter_args_create(ModelCheckpoint, config.checkpoint)
 
     # Initialize model wrapper
-    model_wrapper = ModelWrapper(config, resume=ckpt, logger=logger)
+    model_wrapper = ModelWrapper(config, resume=ckpt, loggers=loggers)
 
     # Create trainer with args.arch parameters
     trainer = HorovodTrainer(**config.arch, checkpoint=checkpoint)

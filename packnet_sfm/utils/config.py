@@ -104,34 +104,7 @@ def set_checkpoint(config):
     return config.checkpoint
 
 
-@on_rank_0
-def prep_logger_and_checkpoint(model):
-    """
-    Use logger and checkpoint information to update configuration
 
-    Parameters
-    ----------
-    model : nn.Module
-        Module to update
-    """
-    # Change run name to be the wandb assigned name
-    if model.logger and not model.config.wandb.dry_run:
-        model.config.name = model.config.wandb.name = model.logger.run_name
-        model.config.wandb.url = model.logger.run_url
-        # If we are saving models we need to update the path
-        if model.config.checkpoint.filepath is not '':
-            # Change checkpoint filepath
-            filepath = model.config.checkpoint.filepath.split('/')
-            filepath[-2] = model.config.name
-            model.config.checkpoint.filepath = '/'.join(filepath)
-            # Change callback dirpath
-            dirpath = os.path.join(os.path.dirname(
-                model.trainer.checkpoint.dirpath), model.config.name)
-            model.trainer.checkpoint.dirpath = dirpath
-            os.makedirs(dirpath, exist_ok=True)
-            model.config.checkpoint.s3_url = s3_url(model.config)
-        # Log updated configuration
-        model.logger.log_config(model.config)
 
 def get_default_config(cfg_default):
     """Get default configuration from file"""

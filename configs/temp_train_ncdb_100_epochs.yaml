@@ -1,0 +1,72 @@
+model:
+    name: 'SemiSupCompletionModel'
+    checkpoint_path: 'checkpoints/resnetsan01-quantized_Floatfunc/default_config-train_resnet_san_kitti-2025.07.08-09h49m58s/epoch=04_KITTI_raw-eigen_test_files-groundtruth-loss=0.000.ckpt'
+    loss:
+        supervised_method: 'sparse-ssi-silog'
+        supervised_num_scales: 1
+        supervised_loss_weight: 1.0
+    optimizer:
+        name: 'Adam'
+        depth:
+            lr: 0.0001
+        pose:
+            lr: 0.0001
+    scheduler:
+        name: 'StepLR'
+        step_size: 30
+        gamma: 0.5
+    depth_net:
+        name: 'ResNetSAN01'
+        version: '18A'
+        dropout: 0.1
+        # 🔧 기존 구조로 설정
+        use_film: false           # 체크포인트와 동일하게
+        film_scales: [0]         # 체크포인트와 동일하게
+        use_enhanced_lidar: false  # ❌ Enhanced 비활성화
+    params:
+        crop: 'garg'
+        min_depth: 0.0
+        max_depth: 80.0
+        scale_output: 'top-center'
+
+datasets:
+    augmentation:
+        image_shape: [1536, 1920] # Height, Width
+        crop_train_borders: []
+        crop_eval_borders: []
+    train:
+        batch_size: 4 # Reduced for larger image size
+        dataset: ['ncdb']
+        path: ['/workspace/packnet-sfm/ncdb-cls-sample/synced_data']
+        split: ['mapping_data.json']
+        repeat: [1]
+    validation:
+        batch_size: 1 # Reduced for larger image size
+        dataset: ['ncdb']
+        path: ['/workspace/packnet-sfm/ncdb-cls-sample/synced_data']
+        split: ['mapping_data.json']
+    test:
+        batch_size: 1 # Reduced for larger image size
+        dataset: ['ncdb']
+        path: ['/workspace/packnet-sfm/ncdb-cls-sample/synced_data']
+        split: ['mapping_data.json']
+
+# 🆕 중간 평가 설정
+arch:
+    seed: 42
+    clip_grad: 10.0
+    max_epochs: 100 # Increased for longer training
+    eval_during_training: False
+    eval_progress_interval: 0.5
+    eval_subset_size: 100
+
+checkpoint:
+    filepath: 'checkpoints/resnetsan01-quantized_Floatfunc/'
+    save_top_k: -1
+
+save:
+    folder: 'outputs/resnetsan01-quantized_Floatfunc/'
+
+tensorboard:
+    dry_run: false
+    log_frequency: 10 # Log depth every 10 steps

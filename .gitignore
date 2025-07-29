@@ -12,7 +12,6 @@ build/
 develop-eggs/
 dist/
 downloads/
-outputs/
 checkpoints/
 aiwbin_test/
 analysis*/
@@ -34,11 +33,23 @@ enhanced_analysis_results/
 *.aiwbin
 *.onnx
 *.npy
-*.txt
+*.npz
 *.png
+*.pcd
+*.jpg
 client.py
 client_infer.py
+sync_tool.py
+camera_lidar_projector.py
+generate_lut.py
+nc_dataset.py
 eval_npu.py
+
+ncdb-cls/
+ncdb-cls-sample/
+outputs/
+*.md
+*.txt
 MANIFEST
 
 # PyInstaller

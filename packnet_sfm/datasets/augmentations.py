@@ -199,17 +199,33 @@ def to_tensor_sample(sample, tensor_type='torch.FloatTensor'):
     sample : dict
         Sample with keys cast as tensors
     """
-    transform = transforms.ToTensor()
     # Convert single items
     for key in filter_dict(sample, [
         'rgb', 'rgb_original', 'depth', 'input_depth',
     ]):
-        sample[key] = transform(sample[key]).type(tensor_type)
+        if isinstance(sample[key], Image.Image):
+            # Convert PIL Image to NumPy array first, then to Tensor
+            sample[key] = transforms.ToTensor()(np.array(sample[key])).type(tensor_type)
+        elif isinstance(sample[key], np.ndarray):
+            # For NumPy arrays, ToTensor should work directly
+            sample[key] = transforms.ToTensor()(sample[key]).type(tensor_type)
+        else:
+            # Fallback for other types (e.g., numbers, lists of numbers)
+            sample[key] = torch.tensor(sample[key]).type(tensor_type)
+
     # Convert lists
     for key in filter_dict(sample, [
         'rgb_context', 'rgb_context_original', 'depth_context'
     ]):
-        sample[key] = [transform(k).type(tensor_type) for k in sample[key]]
+        new_list = []
+        for item in sample[key]:
+            if isinstance(item, Image.Image):
+                new_list.append(transforms.ToTensor()(np.array(item)).type(tensor_type))
+            elif isinstance(item, np.ndarray):
+                new_list.append(transforms.ToTensor()(item).type(tensor_type))
+            else:
+                new_list.append(torch.tensor(item).type(tensor_type))
+        sample[key] = new_list
     # Return converted sample
     return sample
 

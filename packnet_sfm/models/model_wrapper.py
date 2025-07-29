@@ -11,7 +11,7 @@ from collections import OrderedDict
 from torch.utils.data import ConcatDataset, DataLoader
 
 from packnet_sfm.datasets.transforms import get_transforms
-from packnet_sfm.utils.depth import inv2depth, post_process_inv_depth, compute_depth_metrics
+from packnet_sfm.utils.depth import inv2depth, post_process_inv_depth, compute_depth_metrics, viz_inv_depth
 from packnet_sfm.utils.horovod import print0, world_size, rank, on_rank_0
 from packnet_sfm.utils.image import flip_lr
 from packnet_sfm.utils.load import load_class, load_class_args_create, \
@@ -42,12 +42,12 @@ class ModelWrapper(torch.nn.Module):
         Model configuration (cf. configs/default_config.py)
     """
 
-    def __init__(self, config, resume=None, logger=None, load_datasets=True):
+    def __init__(self, config, resume=None, loggers=None, load_datasets=True):
         super().__init__()
 
         # Store configuration, checkpoint and logger
         self.config = config
-        self.logger = logger
+        self.loggers = loggers if loggers is not None else []
         self.resume = resume
 
         # Set random seed
@@ -237,13 +237,18 @@ class ModelWrapper(torch.nn.Module):
             'metrics': output['metrics']
         }
 
-    def validation_step(self, batch, *args):
+    def validation_step(self, batch, batch_idx, dataset_idx):
         """Processes a validation batch."""
         output = self.evaluate_depth(batch)
-        if self.logger:
-            self.logger.log_depth('val', batch, output, args,
+        if self.loggers:
+            # Visualize predicted depth
+            viz_pred_inv_depth = viz_inv_depth(output['inv_depth'][0])
+            output['viz_pred_inv_depth'] = viz_pred_inv_depth
+
+            for logger in self.loggers:
+                logger.log_depth('val', batch, output, None,
                                   self.validation_dataset, world_size(),
-                                  self.config.datasets.validation)
+                                  self.config.datasets.validation, step=self.current_epoch + 1, batch_idx=batch_idx)
         return {
             'idx': batch['idx'],
             **output['metrics'],
@@ -293,10 +298,11 @@ class ModelWrapper(torch.nn.Module):
         loss_and_metrics = reduce_dict(loss_and_metrics, to_item=True)
 
         # Log to wandb
-        if self.logger:
-            self.logger.log_metrics({
-                **self.logs, **loss_and_metrics,
-            })
+        if self.loggers:
+            for logger in self.loggers:
+                logger.log_metrics({
+                    **self.logs, **loss_and_metrics,
+                }, step=self.current_epoch + 1)
 
         return {
             **loss_and_metrics
@@ -318,10 +324,30 @@ class ModelWrapper(torch.nn.Module):
         self.print_metrics(metrics_data, self.config.datasets.validation)
 
         # Log to wandb
-        if self.logger:
-            self.logger.log_metrics({
-                **metrics_dict, 'global_step': self.current_epoch + 1,
-            })
+        if self.loggers:
+            # Filter metrics to log only essential validation metrics
+            log_metrics = {
+                'global_step': self.current_epoch + 1,
+            }
+            for key, val in metrics_dict.items():
+                if key.startswith('depth'):
+                    log_metrics[f'val/{key}'] = val
+
+            for logger in self.loggers:
+                logger.log_metrics(log_metrics, step=self.current_epoch + 1)
+
+            # Log to wandb
+        if self.loggers:
+            # Filter metrics to log only essential validation metrics
+            log_metrics = {
+                'global_step': self.current_epoch + 1,
+            }
+            for key, val in metrics_dict.items():
+                if key.startswith('depth'):
+                    log_metrics[f'val/{key}'] = val
+
+            for logger in self.loggers:
+                logger.log_metrics(log_metrics, step=self.current_epoch + 1)
 
         return {
             **metrics_dict
@@ -435,11 +461,19 @@ class ModelWrapper(torch.nn.Module):
                         *((key.upper(),) + tuple(metric.tolist()))), 'cyan')))
         print(hor_line)
 
-        if self.logger:
-            run_line = wrap(pcolor('{:<60}{:>31}'.format(
-                self.config.wandb.url, self.config.wandb.name), 'yellow', attrs=['dark']))
-            print(run_line)
-            print(hor_line)
+        if self.loggers:
+            # Find WandbLogger if it exists in the list of loggers
+            wandb_logger = None
+            for logger in self.loggers:
+                if hasattr(logger, 'run_name') and hasattr(logger, 'run_url'): # Check for WandbLogger specific attributes
+                    wandb_logger = logger
+                    break
+            
+            if wandb_logger:
+                run_line = wrap(pcolor('{:<60}{:>31}'.format(
+                    wandb_logger.run_url, wandb_logger.run_name), 'yellow', attrs=['dark']))
+                print(run_line)
+                print(hor_line)
 
         print()
 
@@ -596,6 +630,13 @@ def setup_dataset(config, mode, requirements, **kwargs):
             dataset = OptimizedKITTIDataset(
                 config.path[i], path_split,
                 **dataset_args, **dataset_args_i,
+            )
+        # ncdb dataset
+        elif config.dataset[i] == 'ncdb':
+            from packnet_sfm.datasets.ncdb_dataset import NcdbDataset
+            dataset = NcdbDataset(
+                config.path[i], config.split[i],
+                **dataset_args
             )
         # DGP dataset
         elif config.dataset[i] == 'DGP':

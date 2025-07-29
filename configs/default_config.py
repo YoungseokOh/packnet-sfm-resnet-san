@@ -235,6 +235,14 @@ cfg.wandb.tags = []                                      # Wandb tags
 cfg.wandb.dir = ''                                       # Wandb save folder
 
 ########################################################################################################################
+### TENSORBOARD
+########################################################################################################################
+cfg.tensorboard = CN()
+cfg.tensorboard.dry_run = True                           # Tensorboard dry-run (not logging)
+cfg.tensorboard.log_frequency = 100                      # How often to log images/depth maps (steps)
+cfg.tensorboard.log_dir = ''                             # Tensorboard log directory
+
+########################################################################################################################
 ### THESE SHOULD NOT BE CHANGED
 ########################################################################################################################
 cfg.config = ''                 # Run configuration file

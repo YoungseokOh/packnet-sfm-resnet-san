@@ -6,10 +6,10 @@ import horovod.torch as hvd
 import traceback
 import json
 from packnet_sfm.trainers.base_trainer import BaseTrainer, sample_to_cuda
-from packnet_sfm.utils.config import prep_logger_and_checkpoint
 from packnet_sfm.utils.logging import print_config, pcolor
 from packnet_sfm.utils.logging import AvgMeter
 from tqdm import tqdm
+from packnet_sfm.utils.config import s3_url # Add s3_url import
 
 
 class HorovodTrainer(BaseTrainer):
@@ -45,7 +45,27 @@ class HorovodTrainer(BaseTrainer):
         # Prepare module for training
         self.module = module
         module.trainer = self
-        prep_logger_and_checkpoint(module)
+        # Handle loggers and checkpoint path updates
+        if module.loggers:
+            for logger in module.loggers:
+                # This part specifically handles WandbLogger for run naming and config logging
+                if hasattr(logger, 'run_name') and hasattr(logger, 'run_url') and hasattr(logger, 'log_config') and not module.config.wandb.dry_run:
+                    module.config.name = module.config.wandb.name = logger.run_name
+                    module.config.wandb.url = logger.run_url
+                    # If we are saving models we need to update the path
+                    if module.config.checkpoint.filepath is not '':
+                        # Change checkpoint filepath
+                        filepath = module.config.checkpoint.filepath.split('/')
+                        filepath[-2] = module.config.name
+                        module.config.checkpoint.filepath = '/'.join(filepath)
+                        # Change callback dirpath
+                        dirpath = os.path.join(os.path.dirname(
+                            self.checkpoint.dirpath), module.config.name)
+                        self.checkpoint.dirpath = dirpath
+                        os.makedirs(dirpath, exist_ok=True)
+                        module.config.checkpoint.s3_url = s3_url(module.config)
+                    # Log updated configuration
+                    logger.log_config(module.config)
         print_config(module.config)
 
         # Send module to GPU
