@@ -295,11 +295,11 @@ class OptimizedKITTIDataset(Dataset):
         self.data_transform = data_transform
 
         self.depth_type = depth_type
-        self.with_depth = depth_type is not '' and depth_type is not None
+        self.with_depth = depth_type != '' and depth_type != None
         self.with_pose = with_pose
 
         self.input_depth_type = input_depth_type
-        self.with_input_depth = input_depth_type is not '' and input_depth_type is not None
+        self.with_input_depth = input_depth_type != '' and input_depth_type != None
 
         # 🆕 병렬화 및 캐싱 설정
         self.use_cache = use_cache

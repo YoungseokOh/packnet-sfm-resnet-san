@@ -10,6 +10,8 @@ from packnet_sfm.utils.image import image_grid
 
 ########################################################################################################################
 
+import sys # For sys.float_info.epsilon
+
 class Camera(nn.Module):
     """
     Differentiable camera class implementing reconstruction and projection
@@ -189,3 +191,135 @@ class Camera(nn.Module):
 
         # Return pixel coordinates
         return torch.stack([Xnorm, Ynorm], dim=-1).view(B, H, W, 2)
+
+########################################################################################################################
+
+class FisheyeCamera(nn.Module):
+    """
+    Differentiable camera class implementing projection
+    functions for a fisheye model (VADAS).
+    """
+    def __init__(self, intrinsics, Tcw=None, image_size=None):
+        """
+        Initializes the FisheyeCamera class.
+
+        Parameters
+        ----------
+        intrinsics : dict
+            Dictionary containing fisheye camera intrinsic parameters.
+            Expected keys: 'k', 's', 'div', 'ux', 'uy'.
+        Tcw : Pose
+            Camera -> World pose transformation.
+        image_size : tuple (H, W)
+            The size of the image.
+        """
+        super().__init__()
+        self.k = intrinsics['k']
+        self.s = intrinsics['s']
+        self.div = intrinsics['div']
+        self.ux = intrinsics['ux']
+        self.uy = intrinsics['uy']
+        self.Tcw = Pose.identity(len(self.k)) if Tcw is None else Tcw
+        self.image_size = image_size
+
+    def __len__(self):
+        """Batch size of the camera intrinsics"""
+        return len(self.k)
+
+    def to(self, *args, **kwargs):
+        """Moves object to a specific device"""
+        self.k = self.k.to(*args, **kwargs)
+        self.s = self.s.to(*args, **kwargs)
+        self.div = self.div.to(*args, **kwargs)
+        self.ux = self.ux.to(*args, **kwargs)
+        self.uy = self.uy.to(*args, **kwargs)
+        self.Tcw = self.Tcw.to(*args, **kwargs)
+        return self
+
+    @property
+    @lru_cache()
+    def Twc(self):
+        """World -> Camera pose transformation (inverse of Tcw)"""
+        return self.Tcw.inverse()
+
+    def project(self, X, frame='w'):
+        """
+        Projects 3D points onto the fisheye image plane.
+        This implementation is based on the VADAS camera model.
+
+        Parameters
+        ----------
+        X : torch.Tensor [B,3,H,W] or [B,3,N]
+            3D points to be projected.
+        frame : 'w' or 'c'
+            Reference frame: 'c' for camera and 'w' for world.
+
+        Returns
+        -------
+        points : torch.Tensor [B,H,W,2] or [B,N,2]
+            2D projected points, normalized to [-1, 1] range.
+        """
+        if len(X.shape) == 4:
+            B, C, H, W = X.shape
+            assert C == 3
+            X_flat = X.view(B, 3, -1)
+        elif len(X.shape) == 3:
+            B, C, N = X.shape
+            assert C == 3
+            X_flat = X
+            H, W = self.image_size
+            if H is None or W is None:
+                raise ValueError("image_size must be provided for 3D point cloud projection.")
+        else:
+            raise ValueError("Input X must be of shape [B,3,H,W] or [B,3,N]")
+
+
+        # Transform points to camera coordinates
+        if frame == 'w':
+            Xc = self.Tcw @ X_flat
+        elif frame == 'c':
+            Xc = X_flat
+        else:
+            raise ValueError('Unknown reference frame {}'.format(frame))
+
+        # Normalize by depth
+        # Add a small epsilon to Z to avoid division by zero
+        Z = Xc[:, 2, :].clamp(min=sys.float_info.epsilon)
+        x_norm = Xc[:, 0, :] / Z
+        y_norm = Xc[:, 1, :] / Z
+
+        # Fisheye projection logic based on VADAS model
+        r = torch.sqrt(x_norm**2 + y_norm**2)
+        theta = torch.atan(r)
+
+        # Apply polynomial distortion to theta
+        theta_poly = self.k[:, 0].unsqueeze(1)
+        for i in range(1, 7):
+            theta_poly = theta_poly + self.k[:, i].unsqueeze(1) * torch.pow(theta, i)
+
+        # Calculate distorted radius
+        r_d = theta_poly
+
+        # Avoid division by zero for r
+        r_safe = r.clone()
+        r_safe[r < sys.float_info.epsilon] = sys.float_info.epsilon
+
+        # Project to distorted image coordinates
+        x_dist = (r_d / r_safe) * x_norm
+        y_dist = (r_d / r_safe) * y_norm
+
+        # Final pixel coordinates using intrinsic parameters
+        u = self.s.unsqueeze(1) * x_dist + self.ux.unsqueeze(1)
+        v = self.div.unsqueeze(1) * y_dist + self.uy.unsqueeze(1)
+
+        # Normalize to [-1, 1]
+        u_norm = 2 * u / (W - 1) - 1.
+        v_norm = 2 * v / (H - 1) - 1.
+
+        # Stack and reshape
+        coords = torch.stack([u_norm, v_norm], dim=-1) # [B, N, 2]
+        
+        if len(X.shape) == 4:
+            return coords.view(B, H, W, 2)
+        else:
+            return coords

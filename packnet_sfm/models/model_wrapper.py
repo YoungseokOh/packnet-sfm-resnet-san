@@ -228,10 +228,33 @@ class ModelWrapper(torch.nn.Module):
             print(f"❌ Error creating test dataloader: {e}")
             return None
 
-    def training_step(self, batch, *args):
+    def training_step(self, batch, batch_idx, *args):
         """Processes a training batch."""
         batch = stack_batch(batch)
         output = self.model(batch, progress=self.progress)
+
+        # Log training images at a certain interval (e.g., every 100 steps)
+        if self.loggers and batch_idx % 100 == 0: # Log every 100 steps
+            # Visualize predicted depth
+            # Assuming output['inv_depths'] is a list of tensors, and we want the first image from the first tensor
+            viz_pred_inv_depth = viz_inv_depth(output['inv_depths'][0][0])
+
+            # Apply mask if available
+            if 'mask' in batch and batch['mask'] is not None:
+                mask = batch['mask'][0].cpu().numpy() # Get mask for the first image
+                if mask.ndim == 3:
+                    mask = np.squeeze(mask, axis=0)      # -> (H, W)
+                mask = np.expand_dims(mask, axis=-1) # -> (H, W, 1)
+                # Apply mask to visualization
+                viz_pred_inv_depth = viz_pred_inv_depth * mask.astype(np.uint8)
+
+            output['viz_pred_inv_depth'] = viz_pred_inv_depth
+
+            for logger in self.loggers:
+                logger.log_depth('train', batch, output, None,
+                                  self.train_dataset, world_size(),
+                                  self.config.datasets.train, step=self.current_epoch + 1, batch_idx=batch_idx, image_idx=0) # Log first image
+
         return {
             'loss': output['loss'],
             'metrics': output['metrics']
@@ -243,12 +266,22 @@ class ModelWrapper(torch.nn.Module):
         if self.loggers:
             # Visualize predicted depth
             viz_pred_inv_depth = viz_inv_depth(output['inv_depth'][0])
+
+            # Apply mask if available
+            if 'mask' in batch and batch['mask'] is not None:
+                mask = batch['mask'][0].cpu().numpy() # Get mask for the first image
+                if mask.ndim == 3:
+                    mask = np.squeeze(mask, axis=0)      # -> (H, W)
+                mask = np.expand_dims(mask, axis=-1) # -> (H, W, 1)
+                # Apply mask to visualization
+                viz_pred_inv_depth = viz_pred_inv_depth * mask.astype(np.uint8)
+
             output['viz_pred_inv_depth'] = viz_pred_inv_depth
 
             for logger in self.loggers:
                 logger.log_depth('val', batch, output, None,
                                   self.validation_dataset, world_size(),
-                                  self.config.datasets.validation, step=self.current_epoch + 1, batch_idx=batch_idx)
+                                  self.config.datasets.validation, step=self.current_epoch + 1, batch_idx=batch_idx, image_idx=0) # Log first image
         return {
             'idx': batch['idx'],
             **output['metrics'],
@@ -299,9 +332,10 @@ class ModelWrapper(torch.nn.Module):
 
         # Log to wandb
         if self.loggers:
+            prefixed_loss_and_metrics = {f'train/{key}': val for key, val in loss_and_metrics.items()}
             for logger in self.loggers:
                 logger.log_metrics({
-                    **self.logs, **loss_and_metrics,
+                    **self.logs, **prefixed_loss_and_metrics,
                 }, step=self.current_epoch + 1)
 
         return {
@@ -332,19 +366,14 @@ class ModelWrapper(torch.nn.Module):
             for key, val in metrics_dict.items():
                 if key.startswith('depth'):
                     log_metrics[f'val/{key}'] = val
-
-            for logger in self.loggers:
-                logger.log_metrics(log_metrics, step=self.current_epoch + 1)
-
-            # Log to wandb
-        if self.loggers:
-            # Filter metrics to log only essential validation metrics
-            log_metrics = {
-                'global_step': self.current_epoch + 1,
-            }
-            for key, val in metrics_dict.items():
-                if key.startswith('depth'):
-                    log_metrics[f'val/{key}'] = val
+            
+            # Also add validation loss if available (assuming it's part of metrics_dict or can be derived)
+            # This part might need adjustment based on how validation loss is calculated and stored.
+            # For now, assuming 'loss' might be a key in metrics_dict or can be added.
+            if 'loss' in metrics_dict:
+                log_metrics[f'val/loss'] = metrics_dict['loss']
+            elif 'avg_val_loss' in metrics_dict: # Example if a specific validation loss key exists
+                log_metrics[f'val/loss'] = metrics_dict['avg_val_loss']
 
             for logger in self.loggers:
                 logger.log_metrics(log_metrics, step=self.current_epoch + 1)
@@ -635,8 +664,10 @@ def setup_dataset(config, mode, requirements, **kwargs):
         elif config.dataset[i] == 'ncdb':
             from packnet_sfm.datasets.ncdb_dataset import NcdbDataset
             dataset = NcdbDataset(
-                config.path[i], config.split[i],
-                **dataset_args
+                config.path[i], 
+                config.split[i],
+                transform=dataset_args.get('data_transform', None),
+                mask_file=getattr(config, "mask_file", [None])[i]
             )
         # DGP dataset
         elif config.dataset[i] == 'DGP':

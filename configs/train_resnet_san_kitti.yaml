@@ -1,6 +1,5 @@
 model:
     name: 'SemiSupCompletionModel'
-    checkpoint_path: 'checkpoints/resnetsan01-quantized_Floatfunc/default_config-train_resnet_san_kitti-2025.07.08-09h49m58s/epoch=04_KITTI_raw-eigen_test_files-groundtruth-loss=0.000.ckpt'
     loss:
         supervised_method: 'sparse-ssi-silog'
         supervised_num_scales: 1

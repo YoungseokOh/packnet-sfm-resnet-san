@@ -167,7 +167,7 @@ cfg.datasets.train.input_depth_type = ['']          # Training input depth type
 cfg.datasets.train.cameras = [[]]                   # Training cameras (double list, one for each dataset)
 cfg.datasets.train.repeat = [1]                     # Number of times training dataset is repeated per epoch
 cfg.datasets.train.num_logs = 5                     # Number of training images to log
-
+cfg.datasets.train.mask_file = ['']
 ########################################################################################################################
 ### DATASETS.VALIDATION
 ########################################################################################################################

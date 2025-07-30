@@ -86,7 +86,7 @@
             "args": 
             [
                 // "configs/train_resnet_san_kitti.yaml"
-                "configs/temp_train_ncdb_100_epochs.yaml"
+                "configs/train_resnet_san_ncdb.yaml"
             ],
         },
                

@@ -39,10 +39,7 @@ enhanced_analysis_results/
 *.jpg
 client.py
 client_infer.py
-sync_tool.py
-camera_lidar_projector.py
-generate_lut.py
-nc_dataset.py
+
 eval_npu.py
 
 ncdb-cls/
@@ -50,6 +47,11 @@ ncdb-cls-sample/
 outputs/
 *.md
 *.txt
+sync_tool.py
+camera_lidar_projector.py
+generate_lut.py
+nc_dataset.py
+
 MANIFEST
 
 # PyInstaller
