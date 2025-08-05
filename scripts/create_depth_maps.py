@@ -184,11 +184,20 @@ class LidarCameraProjector:
                 if depth_map[v, u] == 0 or depth_map[v, u] > Xc:
                     depth_map[v, u] = Xc
         
+        # 디버깅을 위한 Xc 값 통계 출력
+        valid_depths = depth_map[depth_map > 0]
+        if valid_depths.size > 0:
+            print(f"DEBUG: Projected Xc (depth) - Min: {valid_depths.min()}, Max: {valid_depths.max()}, Mean: {valid_depths.mean()}", file=sys.stderr)
+        else:
+            print("DEBUG: No valid projected depths found.", file=sys.stderr)
+
         return depth_map
 
 def save_depth_map(path: Path, depth_map: np.ndarray):
     """Saves a depth map as a 16-bit PNG image, following KITTI conventions."""
-    depth_map_uint16 = (depth_map * 256.0).astype(np.uint16)
+    # Convert to meters first, then scale by 256 for KITTI-like uint16 storage
+    depth_map_meters = depth_map
+    depth_map_uint16 = (depth_map_meters).astype(np.uint16)
     image = Image.fromarray(depth_map_uint16, mode='I;16')
     image.save(path)
 

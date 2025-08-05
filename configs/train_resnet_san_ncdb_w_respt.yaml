@@ -1,5 +1,6 @@
 model:
     name: 'SemiSupCompletionModel'
+    checkpoint_path: /workspace/packnet-sfm/checkpoints/resnetsan01-ssi-silog/from_worker6/resnet_e29_ssi+silog.ckpt
     loss:
         supervised_method: 'sparse-ssi-silog'
         supervised_num_scales: 1
@@ -32,22 +33,21 @@ datasets:
     train:
         batch_size: 2 # Reduced for larger image size
         dataset: ['ncdb']
-        path: ['/workspace/packnet-sfm/ncdb-cls']
-        split: ['splits/combined_train.json']
+        path: ['/workspace/packnet-sfm/ncdb-cls/synced_data']
+        split: ['train.json']
         repeat: [1]
         mask_file: ['binary_mask.png']
     validation:
         batch_size: 1 # Reduced for larger image size
         dataset: ['ncdb']
-        path: ['/workspace/packnet-sfm/ncdb-cls']
-        split: ['splits/combined_val.json']
+        path: ['/workspace/packnet-sfm/ncdb-cls/synced_data']
+        split: ['val.json']
         mask_file: ['binary_mask.png']
     test:
         batch_size: 1 # Reduced for larger image size
         dataset: ['ncdb']
-        path: ['/workspace/packnet-sfm/ncdb-cls']
-        split: ['splits/combined_test.json']
-        mask_file: ['binary_mask.png']
+        path: ['/workspace/packnet-sfm/ncdb-cls/synced_data']
+        split: ['test.json']
 
 # 🆕 중간 평가 설정
 arch:
@@ -59,11 +59,11 @@ arch:
     eval_subset_size: 100
 
 checkpoint:
-    filepath: 'checkpoints/resnetsan01_ncdb_cls_combined_v1/'
+    filepath: 'checkpoints/resnetsan01_ncdb_cls_w_respt/'
     save_top_k: -1
 
 save:
-    folder: 'outputs/resnetsan01_ncdb_cls_combined_v1/'
+    folder: 'outputs/resnetsan01_ncdb_cls_sample_w_respt/'
 
 tensorboard:
     dry_run: false

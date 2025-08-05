@@ -27,6 +27,10 @@ def parse_args():
                         help='Maximum distance to consider during evaluation')
     parser.add_argument('--crop', type=str, default='', choices=['', 'garg'],
                         help='Which crop to use during evaluation')
+    parser.add_argument('--scale_output', type=str, default='top-center',
+                        help='How to scale output to GT resolution')
+    parser.add_argument('--output_file', type=str, default='metrics.txt',
+                        help='File to save the metrics to')
     args = parser.parse_args()
     return args
 
@@ -54,10 +58,13 @@ def main(args):
     # Get and print average value
     metrics = (sum(metrics) / len(metrics)).detach().cpu().numpy()
     names = ['abs_rel', 'sqr_rel', 'rmse', 'rmse_log', 'a1', 'a2', 'a3']
-    for name, metric in zip(names, metrics):
-        print('{} = {}'.format(name, metric))
+    with open(args.output_file, 'w') as f:
+        for name, metric in zip(names, metrics):
+            f.write('{} = {}\n'.format(name, metric))
+            print('{} = {}'.format(name, metric))
 
 
 if __name__ == '__main__':
     args = parse_args()
     main(args)
+

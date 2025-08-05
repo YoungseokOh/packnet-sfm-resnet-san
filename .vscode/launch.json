@@ -72,6 +72,8 @@
             // 실행할 스크립트 파일을 하나만 주석 해제하세요:
             "program": "${workspaceFolder}/scripts/train.py",
             // "program": "${workspaceFolder}/scripts/eval.py",
+            // "program": "${workspaceFolder}/scripts/evaluate_depth_maps.py",
+            // "program": "${workspaceFolder}/scripts/create_depth_maps.py",
             // "program": "${file}",
             "console": "integratedTerminal",
             "env": 
@@ -82,14 +84,34 @@
             "cwd": "${workspaceFolder}",
             // 필요에 따라 args 를 주석 해제/수정하세요:
 
-            // Train
+            // // Train
             "args": 
             [
                 // "configs/train_resnet_san_kitti.yaml"
                 "configs/train_resnet_san_ncdb.yaml"
+                // "configs/train_resnet_san_ncdb_w_respt.yaml"
             ],
+
+            // Create Depth Maps
+            // "args":
+            // [
+            //     "--parent" ,
+            //     "/workspace/packnet-sfm/ncdb-cls/",
+            //      "--output-dir",
+            //     "/workspace/packnet-sfm/ncdb-cls/synced_data/depth_maps"
+            // ],
+
+            //Evaluate Depth Map
+            // "args": 
+            // [
+            //     "--pred_folder",
+            //     "/workspace/packnet-sfm/ncdb-cls/synced_data/predicted_depth",
+            //     "--gt_folder",
+            //     "/workspace/packnet-sfm/ncdb-cls/synced_data/depth_maps/",
+            // ],
         },
-               
+
+
             // Eval
             // "args": 
             // [

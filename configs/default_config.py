@@ -183,7 +183,7 @@ cfg.datasets.validation.depth_type = ['']           # Validation depth type
 cfg.datasets.validation.input_depth_type = ['']     # Validation input depth type
 cfg.datasets.validation.cameras = [[]]              # Validation cameras (double list, one for each dataset)
 cfg.datasets.validation.num_logs = 5                # Number of validation images to log
-
+cfg.datasets.validation.mask_file = ['']
 ########################################################################################################################
 ### DATASETS.TEST
 ########################################################################################################################
@@ -199,7 +199,7 @@ cfg.datasets.test.depth_type = ['']                 # Test depth type
 cfg.datasets.test.input_depth_type = ['']           # Test input depth type
 cfg.datasets.test.cameras = [[]]                    # Test cameras (double list, one for each dataset)
 cfg.datasets.test.num_logs = 5                      # Number of test images to log
-
+cfg.datasets.test.mask_file = ['']
 ########################################################################################################################
 ### CHECKPOINT
 ########################################################################################################################

@@ -32,57 +32,56 @@ class NcdbDataset(Dataset):
 
     Parameters
     ----------
-    root_dir : str
-        Path to the dataset root directory (e.g., 'ncdb-cls-sample/synced_data').
     split_file : str
-        Path to the split file, which is 'mapping_data.json'.
+        Path to the split file (e.g., '/workspace/packnet-sfm/splits/combined_train.json').
     transform : callable, optional
         A function/transform that takes in a sample and returns a transformed version.
     mask_file : str, optional
-        Path to the binary mask file (e.g., 'binary_mask.png').
+        Path to the binary mask file (e.g., '/workspace/packnet-sfm/ncdb-cls/synced_data/binary_mask.png').
+        This should be an absolute path if used.
     """
-    def __init__(self, root_dir, split_file, transform=None, mask_file=None, **kwargs):
+    def __init__(self, dataset_root, split_file, transform=None, mask_file=None, **kwargs):
         super().__init__()
-        self.root_dir = Path(root_dir)
-        self.file_stems = []
+        self.data_entries = []
+        self.dataset_root = Path(dataset_root)
 
         # Initialize transforms based on kwargs (from config)
-        self.transform = transform # Assuming 'train' mode for now
+        self.transform = transform
 
-        split_path = self.root_dir / split_file
-        if not split_path.exists():
-            raise FileNotFoundError(f"Split file not found at {split_path}")
+        # kwargs에서 transform을 제거하여 중복 전달 방지
+        kwargs.pop('transform', None)
+        
+        # split_file을 dataset_root에 대한 상대 경로로 처리
+        absolute_split_path = self.dataset_root / split_file
+        if not absolute_split_path.exists():
+            raise FileNotFoundError(f"Split file not found at {absolute_split_path}")
 
-        with open(split_path, 'r') as f:
-            # Handle both .txt and .json split files
-            if split_path.suffix == '.txt':
-                self.file_stems = [line.strip() for line in f if line.strip()]
-            elif split_path.suffix == '.json':
-                mapping_data = json.load(f)
-                if isinstance(mapping_data, list):
-                    # Handle list of dictionaries
-                    self.file_stems = [item['new_filename'] for item in mapping_data if 'new_filename' in item]
-                elif isinstance(mapping_data, dict):
-                    # Handle dictionary of lists (original assumption)
-                    self.file_stems = [Path(p).stem for p in mapping_data.get("image_a6", [])]
+        with open(absolute_split_path, 'r') as f:
+            mapping_data = json.load(f)
+            if isinstance(mapping_data, list):
+                self.data_entries = mapping_data
+            else:
+                raise ValueError(f"Unsupported split file format: {split_file}. Expected a list of dictionaries.")
 
-        # Load mask file if provided
         self.mask = None
         if mask_file:
-            mask_path = self.root_dir / mask_file
-            if not mask_path.exists():
-                raise FileNotFoundError(f"Mask file not found at {mask_path}")
-            self.mask = np.array(Image.open(mask_path).convert('L')) # Convert to grayscale (assuming 0 or 1 values)
+            # mask_file을 dataset_root에 대한 상대 경로로 처리
+            absolute_mask_path = self.dataset_root / mask_file
+            if not absolute_mask_path.exists():
+                raise FileNotFoundError(f"Mask file not found at {absolute_mask_path}")
+            self.mask = (np.array(Image.open(absolute_mask_path).convert('L')) > 0).astype(np.uint8)
 
     def __len__(self):
-        return len(self.file_stems)
+        return len(self.data_entries)
 
     def __getitem__(self, idx):
-        stem = self.file_stems[idx]
+        entry = self.data_entries[idx]
+        stem = entry['new_filename']
+        # dataset_root = Path(entry['dataset_root']) # 이 줄은 더 이상 필요 없음
         
-        # Construct paths (changed .png to .jpg for image_path)
-        image_path = self.root_dir / 'image_a6' / f"{stem}.jpg"
-        depth_path = self.root_dir / 'depth_maps' / f"{stem}.png" # Depth maps are typically PNG
+        # Construct paths using self.dataset_root
+        image_path = self.dataset_root / entry['dataset_root'] / 'image_a6' / f"{stem}.jpg"
+        depth_path = self.dataset_root / entry['dataset_root'] / 'depth_maps' / f"{stem}.png"
 
         # 캘리브레이션 데이터는 하드코딩된 DEFAULT_CALIB_A6 사용
         calib_data = DEFAULT_CALIB_A6
@@ -117,9 +116,8 @@ class NcdbDataset(Dataset):
             raise RuntimeError(f"Error loading data for stem {stem}: {e}")
 
         # Convert depth map and apply scale factor
-        depth_gt = np.asarray(depth_png, dtype=np.uint16)
-        depth_gt = depth_gt.astype(np.float32) / 256.0
-
+        depth_gt_png = np.asarray(depth_png, dtype=np.uint16)
+        depth_gt = depth_gt_png.astype(np.float32)
         image_np = np.array(image)
 
         # Apply mask if available
