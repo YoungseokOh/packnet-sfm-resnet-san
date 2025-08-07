@@ -4,7 +4,7 @@ import random
 from pathlib import Path
 
 def create_combined_splits(dataset_a_root, dataset_b_root, output_dir,
-                           train_ratio=0.8, val_ratio=0.1, test_ratio=0.1):
+                           train_ratio=0.95, val_ratio=0.025, test_ratio=0.025):
     """
     두 개의 데이터셋 mapping_data.json을 통합하여 train/val/test 스플릿을 생성합니다.
 

@@ -42,6 +42,7 @@ client_infer.py
 
 eval_npu.py
 
+.github/
 ncdb-cls/
 ncdb-cls-sample/
 outputs/

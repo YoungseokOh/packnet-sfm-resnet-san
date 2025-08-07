@@ -54,9 +54,6 @@ class VADASFisheyeCameraModel(CameraModelBase):
         sinPhi = ny / dist
         theta = math.atan2(dist, Xc)
 
-        if Xc < 0:
-            return 0, 0, False
-
         xd = theta * self.s
         if abs(self.div) < 1e-9:
             return 0, 0, False
@@ -167,16 +164,25 @@ class LidarCameraProjector:
         depth_map = np.zeros((image_height, image_width), dtype=np.float32)
         
         cloud_xyz_hom = np.hstack((cloud_xyz, np.ones((cloud_xyz.shape[0], 1))))
+        # Define the exclusion condition based on Y and X coordinates
+        # Exclude points where (Y <= 0.5 and Y >= -0.7) AND (X >= 0.0)
+        exclude_y_condition = (cloud_xyz_hom[:, 1] <= 0.5) & (cloud_xyz_hom[:, 1] >= -0.7)
+        exclude_x_condition = (cloud_xyz_hom[:, 0] >= 0.0)
+        
+        # Combine conditions to get points to EXCLUDE
+        points_to_exclude = exclude_y_condition & exclude_x_condition
+        
+        # Keep only the points that are NOT in the exclusion set
+        cloud_xyz_hom = cloud_xyz_hom[~points_to_exclude]
+
+        # Transform LiDAR points to camera coordinates
         lidar_to_camera_transform = cam_extrinsic @ self.calib_db.lidar_to_world
         points_cam_hom = (lidar_to_camera_transform @ cloud_xyz_hom.T).T
         points_cam = points_cam_hom[:, :3]
 
         for i in range(points_cam.shape[0]):
             Xc, Yc, Zc = points_cam[i]
-            
-            if Xc <= 0:
-                continue
-
+        
             u, v, valid_projection = camera_model.project_point(Xc, Yc, Zc)
 
             if valid_projection and 0 <= u < image_width and 0 <= v < image_height:
@@ -185,11 +191,11 @@ class LidarCameraProjector:
                     depth_map[v, u] = Xc
         
         # 디버깅을 위한 Xc 값 통계 출력
-        valid_depths = depth_map[depth_map > 0]
-        if valid_depths.size > 0:
-            print(f"DEBUG: Projected Xc (depth) - Min: {valid_depths.min()}, Max: {valid_depths.max()}, Mean: {valid_depths.mean()}", file=sys.stderr)
-        else:
-            print("DEBUG: No valid projected depths found.", file=sys.stderr)
+        # valid_depths = depth_map[depth_map > 0]
+        # if valid_depths.size > 0:
+        #     print(f"DEBUG: Projected Xc (depth) - Min: {valid_depths.min()}, Max: {valid_depths.max()}, Mean: {valid_depths.mean()}", file=sys.stderr)
+        # else:
+        #     print("DEBUG: No valid projected depths found.", file=sys.stderr)
 
         return depth_map
 

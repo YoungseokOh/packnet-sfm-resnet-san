@@ -32,16 +32,16 @@ def convert_png_to_jpg(input_dir, output_dir, quality=100):
     return converted_count, len(png_files)
 
 if __name__ == "__main__":
-    input_directory = "/workspace/packnet-sfm/ncdb-cls-sample/synced_data/image_a6/"
+    input_directory = "/workspace/packnet-sfm/ncdb-cls/2025-07-11_15-00-27_410410_A/synced_data/image_a6"
     # For in-place replacement, output_directory is the same as input_directory
-    output_directory = "/workspace/packnet-sfm/ncdb-cls-sample/synced_data/image_a6/"
+    output_directory = "/workspace/packnet-sfm/ncdb-cls/2025-07-11_15-00-27_410410_A/synced_data/image_a6_jpg"
     
     print(f"Converting PNGs in {input_directory} to JPGs in {output_directory}...")
     converted, total = convert_png_to_jpg(input_directory, output_directory)
     print(f"Conversion complete. Converted {converted} out of {total} PNG files.")
 
     # Verification step: Check if the number of JPGs matches the original number of PNGs
-    original_png_count = len(list(Path("/workspace/packnet-sfm/ncdb-cls-sample/synced_data/image_a6_png_backup/").glob('**/*.png')))
+    original_png_count = len(list(Path("/workspace/packnet-sfm/ncdb-cls/2025-07-11_15-00-27_410410_A/synced_data/image_a6_png_backup/").glob('**/*.png')))
     current_jpg_count = len(list(Path(output_directory).glob('**/*.jpg')))
     
     print(f"Original PNG count (from backup): {original_png_count}")

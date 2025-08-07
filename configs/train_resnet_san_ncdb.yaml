@@ -59,11 +59,11 @@ arch:
     eval_subset_size: 100
 
 checkpoint:
-    filepath: 'checkpoints/resnetsan01_ncdb_cls_combined_v1/'
+    filepath: 'checkpoints/resnetsan01_ncdb_cls_combined_wo_useless_point_v1/'
     save_top_k: -1
 
 save:
-    folder: 'outputs/resnetsan01_ncdb_cls_combined_v1/'
+    folder: 'outputs/resnetsan01_ncdb_cls_combined_wo_useless_point_v1/'
 
 tensorboard:
     dry_run: false

@@ -143,6 +143,7 @@ class NcdbDataset(Dataset):
             'distortion_coeffs': distortion_coeffs, # 왜곡 계수 딕셔너리
             'extrinsic': extrinsic_matrix, # 카메라 외부 파라미터
             'lidar_to_world': lidar_to_world_matrix, # LiDAR to World 변환
+            'filename': stem,
             'meta': {
                 'image_path': str(image_path),
                 'depth_path': str(depth_path),
