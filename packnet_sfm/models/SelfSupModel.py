@@ -30,7 +30,8 @@ class SelfSupModel(SfmModel):
         }
 
     def self_supervised_loss(self, image, ref_images, inv_depths, poses,
-                             intrinsics, return_logs=False, progress=0.0):
+                             intrinsics_list, distortion_coeffs, # Changed intrinsics to intrinsics_list, added distortion_coeffs
+                             return_logs=False, progress=0.0, mask=None):
         """
         Calculates the self-supervised photometric loss.
 
@@ -44,21 +45,40 @@ class SelfSupModel(SfmModel):
             Predicted inverse depth maps from the original image
         poses : list of Pose
             List containing predicted poses between original and context images
-        intrinsics : torch.Tensor [B,3,3]
-            Camera intrinsics
+        intrinsics_list : torch.Tensor [B,N] (VADAS intrinsic list)
+            Camera intrinsics (full VADAS intrinsic list)
+        distortion_coeffs : dict
+            Dictionary containing fisheye camera intrinsic parameters ('k', 's', 'div', 'ux', 'uy').
         return_logs : bool
             True if logs are stored
         progress :
             Training progress percentage
+        mask : torch.Tensor [B,1,H,W], optional
+            Binary mask for valid pixels
 
         Returns
         -------
         output : dict
             Dictionary containing a "loss" scalar a "metrics" dictionary
         """
+        # Prepare intrinsics dictionary for MultiViewPhotometricLoss
+        # MultiViewPhotometricLoss expects a dict for intrinsics
+        # We are passing the same intrinsics for both original and reference cameras for now
+        # If ref_intrinsics are different, they should be passed separately from batch
+        
+        # Ensure distortion_coeffs are on the correct device and have correct batch size
+        # This is handled in NcdbDataset, but good to be explicit if needed
+        
+        # For now, we assume intrinsics_list and distortion_coeffs are for the current image
+        # and will be used for both original and reference cameras in the photometric loss.
+        
+        # The MultiViewPhotometricLoss expects a dict for intrinsics,
+        # which is already prepared in NcdbDataset as 'distortion_coeffs'.
+        # We just need to pass it correctly.
+        
         return self._photometric_loss(
-            image, ref_images, inv_depths, intrinsics, intrinsics, poses,
-            return_logs=return_logs, progress=progress)
+            image, ref_images, inv_depths, distortion_coeffs, distortion_coeffs, poses, # Passed distortion_coeffs for both
+            return_logs=return_logs, progress=progress, mask=mask)
 
     def forward(self, batch, return_logs=False, progress=0.0):
         """
@@ -88,8 +108,12 @@ class SelfSupModel(SfmModel):
             # Otherwise, calculate self-supervised loss
             self_sup_output = self.self_supervised_loss(
                 batch['rgb_original'], batch['rgb_context_original'],
-                output['inv_depths'], output['poses'], batch['intrinsics'],
-                return_logs=return_logs, progress=progress)
+                output['inv_depths'], output['poses'],
+                batch['intrinsics'], # This is the full VADAS intrinsic list
+                batch['distortion_coeffs'], # Added distortion_coeffs
+                return_logs=return_logs, progress=progress,
+                mask=batch.get('mask', None) # Pass mask if available
+            )
             # Return loss and metrics
             return {
                 'loss': self_sup_output['loss'],

@@ -140,7 +140,7 @@ class SupervisedLoss(LossBase):
 
 ########################################################################################################################
 
-    def calculate_loss(self, inv_depths, gt_inv_depths):
+    def calculate_loss(self, inv_depths, gt_inv_depths, masks=None):
         """
         Calculate the supervised loss.
 
@@ -150,6 +150,8 @@ class SupervisedLoss(LossBase):
             List of predicted inverse depth maps
         gt_inv_depths : list of torch.Tensor [B,1,H,W]
             List of ground-truth inverse depth maps
+        masks : list of torch.Tensor, optional
+            List of binary masks to apply. Defaults to None.
 
         Returns
         -------
@@ -163,21 +165,40 @@ class SupervisedLoss(LossBase):
             eps = 1e-6
 
             for i in range(num_scales):
-                mask = (gt_inv_depths[i] > 0.).detach()
-                pred_filled = inv_depths[i].masked_fill(~mask, eps)
-                gt_filled = gt_inv_depths[i].masked_fill(~mask, eps)
+                # 기존 마스크: Ground Truth가 0보다 큰 픽셀
+                valid_mask = (gt_inv_depths[i] > 0.).detach()
                 
-                # 🆕 Enhanced SSI Loss with progress information
-                if hasattr(self.loss_func, 'forward') and 'progress' in self.loss_func.forward.__code__.co_varnames:
-                    # Enhanced or Progressive SSI Loss
-                    loss_i = self.loss_func(pred_filled, gt_filled, mask=mask, progress=getattr(self, '_progress', 0.0))
+                # 추가 Binary mask 로드 및 결합
+                current_mask = valid_mask
+                if masks is not None and i < len(masks) and masks[i] is not None:
+                    # Ensure mask dimensions match for broadcasting
+                    if masks[i].shape != valid_mask.shape:
+                        # Resize mask if necessary (assuming masks[i] is already a tensor)
+                        masks[i] = torch.nn.functional.interpolate(
+                            masks[i].float().unsqueeze(0).unsqueeze(0), # Add batch and channel dims
+                            size=valid_mask.shape[2:], # Target H, W
+                            mode='nearest'
+                        ).squeeze(0).squeeze(0) # Remove batch and channel dims
+                        masks[i] = (masks[i] > 0).float() # Ensure it's a binary mask (0 or 1)
+
+                    current_mask = valid_mask & masks[i].to(valid_mask.device) # Combine masks
+
+                pred_filled = inv_depths[i].masked_fill(~current_mask, eps)
+                gt_filled = gt_inv_depths[i].masked_fill(~current_mask, eps)
+                
+                # Enhanced or Progressive SSI Loss handling
+                if hasattr(self.loss_func, 'forward') and 'mask' in self.loss_func.forward.__code__.co_varnames:
+                    # Pass the combined mask to the loss function
+                    loss_i = self.loss_func(pred_filled, gt_filled, mask=current_mask, progress=getattr(self, '_progress', 0.0))
                 elif hasattr(self.loss_func, 'forward') and 'epoch' in self.loss_func.forward.__code__.co_varnames:
-                    # Progressive SSI Loss with epoch
-                    loss_i = self.loss_func(pred_filled, gt_filled, mask=mask, epoch=getattr(self, '_epoch', 0))
+                    loss_i = self.loss_func(pred_filled, gt_filled, mask=current_mask, epoch=getattr(self, '_epoch', 0))
                 else:
-                    # Standard loss functions
-                    loss_i = self.loss_func(pred_filled, gt_filled)
-                
+                    # If loss function doesn't accept mask, use the already masked tensors
+                    if hasattr(self.loss_func, 'forward') and 'mask' in self.loss_func.forward.__code__.co_varnames:
+                         loss_i = self.loss_func(pred_filled, gt_filled, mask=current_mask) # Pass combined mask
+                    else:
+                         loss_i = self.loss_func(pred_filled, gt_filled)
+
                 total_loss += loss_i
 
             return total_loss / float(num_scales)
@@ -188,7 +209,7 @@ class SupervisedLoss(LossBase):
                 for i in range(num_scales)
             ]) / float(num_scales)
     
-    def forward(self, inv_depths, gt_inv_depth, return_logs=False, progress=0.0):
+    def forward(self, inv_depths, gt_inv_depth, return_logs=False, progress=0.0, masks=None):
         """Forward with progress information for enhanced losses"""
         # Store progress for enhanced losses
         self._progress = progress
@@ -198,8 +219,9 @@ class SupervisedLoss(LossBase):
         # Match predicted scales for ground-truth
         gt_inv_depths = match_scales(gt_inv_depth, inv_depths, self.n,
                                      mode='nearest', align_corners=None)
-        # Calculate and store supervised loss
-        loss = self.calculate_loss(inv_depths, gt_inv_depths)
+        
+        # Calculate and store supervised loss, passing masks
+        loss = self.calculate_loss(inv_depths, gt_inv_depths, masks=masks)
         self.add_metric('supervised_loss', loss)
         # Return losses and metrics
         return {

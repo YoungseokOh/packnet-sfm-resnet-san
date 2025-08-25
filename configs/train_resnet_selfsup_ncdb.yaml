@@ -1,9 +1,5 @@
 model:
-    name: 'SemiSupCompletionModel'
-    loss:
-        supervised_method: 'sparse-ssi-silog'
-        supervised_num_scales: 1
-        supervised_loss_weight: 1.0
+    name: 'SelfSupModel'
     optimizer:
         name: 'Adam'
         depth:
@@ -18,10 +14,9 @@ model:
         name: 'ResNetSAN01'
         version: '18A'
         dropout: 0.1
-        # 🔧 기존 구조로 설정
-        use_film: false           # 체크포인트와 동일하게
-        film_scales: [0]         # 체크포인트와 동일하게
-        use_enhanced_lidar: false  # ❌ Enhanced 비활성화
+    pose_net:
+        name: 'PoseNet'
+        version: ''
     params:
         crop: ''
         min_depth: 0.0
@@ -29,24 +24,29 @@ model:
         scale_output: 'top-center'
 
 datasets:
+    augmentation:
+        image_shape: (1536, 1920) # 1920x1536 원본 이미지 사이즈로 학습
     train:
         batch_size: 2 # Reduced for larger image size
         dataset: ['ncdb']
         path: ['/workspace/packnet-sfm/ncdb-cls']
         split: ['splits/combined_train.json']
         repeat: [1]
+        depth_type: ['depth_maps'] # NCDB는 depth_maps를 사용
         mask_file: ['binary_mask.png']
     validation:
         batch_size: 1 # Reduced for larger image size
         dataset: ['ncdb']
         path: ['/workspace/packnet-sfm/ncdb-cls']
         split: ['splits/combined_val.json']
+        depth_type: ['depth_maps'] # NCDB는 depth_maps를 사용
         mask_file: ['binary_mask.png']
     test:
         batch_size: 1 # Reduced for larger image size
         dataset: ['ncdb']
         path: ['/workspace/packnet-sfm/ncdb-cls']
         split: ['splits/combined_test.json']
+        depth_type: ['depth_maps'] # NCDB는 depth_maps를 사용
         mask_file: ['binary_mask.png']
 
 # 🆕 중간 평가 설정
@@ -59,11 +59,11 @@ arch:
     eval_subset_size: 100
 
 checkpoint:
-    filepath: 'checkpoints/resnetsan01_mask_test/'
+    filepath: 'checkpoints/resnet_selfsup_test/'
     save_top_k: -1
 
 save:
-    folder: 'outputs/resnetsan01_mask_test/'
+    folder: 'outputs/resnet_selfsup_test/'
 
 tensorboard:
     dry_run: false

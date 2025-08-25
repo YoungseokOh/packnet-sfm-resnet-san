@@ -50,7 +50,7 @@ class SfmModel(BaseModel):
         """Add a pose network to the model"""
         self.pose_net = pose_net
 
-    def depth_net_flipping(self, batch, flip):
+    def depth_net_flipping(self, batch, flip, **kwargs):
         """
         Runs depth net with the option of flipping
 
@@ -70,19 +70,19 @@ class SfmModel(BaseModel):
         batch_input = {key: batch[key] for key in filter_dict(batch, self._input_keys)}
         if flip:
             # Run depth network with flipped inputs
-            output = self.depth_net(**flip_batch_input(batch_input))
+            output = self.depth_net(**flip_batch_input(batch_input), **kwargs)
             # Flip output back if training
             output = flip_output(output)
         else:
             # Run depth network
-            output = self.depth_net(**batch_input)
+            output = self.depth_net(**batch_input, **kwargs)
         return output
 
-    def compute_depth_net(self, batch, force_flip=False):
+    def compute_depth_net(self, batch, force_flip=False, **kwargs):
         """Computes inverse depth maps from single images"""
         # Randomly flip and estimate inverse depth maps
         flag_flip_lr = random.random() < self.flip_lr_prob if self.training else force_flip
-        output = self.depth_net_flipping(batch, flag_flip_lr)
+        output = self.depth_net_flipping(batch, flag_flip_lr, **kwargs)
         # If upsampling depth maps at training time
         if self.training and self.upsample_depth_maps:
             output = upsample_output(output, mode='nearest', align_corners=None)
@@ -95,7 +95,7 @@ class SfmModel(BaseModel):
         return [Pose.from_vec(pose_vec[:, i], self.rotation_mode)
                 for i in range(pose_vec.shape[1])]
 
-    def forward(self, batch, return_logs=False, force_flip=False):
+    def forward(self, batch, return_logs=False, force_flip=False, **kwargs):
         """
         Processes a batch.
 
@@ -114,7 +114,7 @@ class SfmModel(BaseModel):
             Dictionary containing the output of depth and pose networks
         """
         # Generate inverse depth predictions
-        depth_output = self.compute_depth_net(batch, force_flip=force_flip)
+        depth_output = self.compute_depth_net(batch, force_flip=force_flip, **kwargs)
         # Generate pose predictions if available
         pose_output = None
         if 'rgb_context' in batch and self.pose_net is not None:

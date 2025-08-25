@@ -83,14 +83,16 @@ class ModelWrapper(torch.nn.Module):
         # Resume model if available
         if resume:
             print0(pcolor('### Resuming from {}'.format(
-                resume['file']), 'magenta', attrs=['bold']))
+                resume['file'])), 'magenta', attrs=['bold'])
             self.model = load_network(
                 self.model, resume['state_dict'], 'model')
             if 'epoch' in resume:
                 self.current_epoch = resume['epoch']
 
     def prepare_datasets(self, validation_requirements, test_requirements):
-        """Prepare datasets for training, validation and test."""
+        """
+        Prepare datasets for training, validation and test.
+        """
         # Prepare datasets
         print0(pcolor('### Preparing Datasets', 'green'))
 
@@ -120,17 +122,23 @@ class ModelWrapper(torch.nn.Module):
 
     @property
     def depth_net(self):
-        """Returns depth network."""
+        """
+        Returns depth network.
+        """
         return self.model.depth_net
 
     @property
     def pose_net(self):
-        """Returns pose network."""
+        """
+        Returns pose network.
+        """
         return self.model.pose_net
 
     @property
     def logs(self):
-        """Returns various logs for tracking."""
+        """
+        Returns various logs for tracking.
+        """
         params = OrderedDict()
         for param in self.optimizer.param_groups:
             params['{}_learning_rate'.format(param['name'].lower())] = param['lr']
@@ -142,11 +150,15 @@ class ModelWrapper(torch.nn.Module):
 
     @property
     def progress(self):
-        """Returns training progress (current epoch / max. number of epochs)"""
+        """
+        Returns training progress (current epoch / max. number of epochs)
+        """
         return self.current_epoch / self.config.arch.max_epochs
 
     def configure_optimizers(self):
-        """Configure depth and pose optimizers and the corresponding scheduler."""
+        """
+        Configure depth and pose optimizers and the corresponding scheduler.
+        """
 
         params = []
         # Load optimizer
@@ -186,12 +198,16 @@ class ModelWrapper(torch.nn.Module):
         return optimizer, scheduler
 
     def train_dataloader(self):
-        """Prepare training dataloader."""
+        """
+        Prepare training dataloader.
+        """
         return setup_dataloader(self.train_dataset,
                                 self.config.datasets.train, 'train')[0]
 
     def val_dataloader(self):
-        """Prepare validation dataloader."""
+        """
+        Prepare validation dataloader.
+        """
         return setup_dataloader(self.validation_dataset,
                                 self.config.datasets.validation, 'validation')
 
@@ -229,66 +245,110 @@ class ModelWrapper(torch.nn.Module):
             return None
 
     def training_step(self, batch, batch_idx, *args):
-        """Processes a training batch."""
-        batch = stack_batch(batch)
-        output = self.model(batch, progress=self.progress)
+        """
+        Processes a training batch.
+        """
+        # 🆕 Pass mask to the model if available
+        model_output = self.model(batch, progress=self.progress, masks=batch.get('mask', None)) # masks 인자 추가
 
         # Log training images at a certain interval (e.g., every 100 steps)
-        if self.loggers and batch_idx % 100 == 0: # Log every 100 steps
+        if self.loggers and batch_idx % self.config.tensorboard.log_frequency == 0: # Log frequency from config
+            # Get first image from batch
+            rgb_original = batch['rgb_original'][0].permute(1, 2, 0).cpu().numpy() # H, W, 3
+            
             # Visualize predicted depth
-            # Assuming output['inv_depths'] is a list of tensors, and we want the first image from the first tensor
-            viz_pred_inv_depth = viz_inv_depth(output['inv_depths'][0][0])
+            viz_pred_inv_depth = viz_inv_depth(model_output['inv_depths'][0][0])
 
             # Apply mask if available
+            mask = None
             if 'mask' in batch and batch['mask'] is not None:
                 mask = batch['mask'][0].cpu().numpy() # Get mask for the first image
                 if mask.ndim == 3:
                     mask = np.squeeze(mask, axis=0)      # -> (H, W)
                 mask = np.expand_dims(mask, axis=-1) # -> (H, W, 1)
                 # Apply mask to visualization
-                viz_pred_inv_depth = viz_pred_inv_depth * mask.astype(np.uint8)
+                viz_pred_inv_depth_masked = viz_pred_inv_depth * mask.astype(np.uint8)
+            else:
+                viz_pred_inv_depth_masked = viz_pred_inv_depth
 
-            output['viz_pred_inv_depth'] = viz_pred_inv_depth
-
+            # 🆕 Log additional visualizations for self-supervised learning
             for logger in self.loggers:
-                logger.log_depth('train', batch, output, None,
-                                  self.train_dataset, world_size(),
-                                  self.config.datasets.train, step=self.current_epoch + 1, batch_idx=batch_idx, image_idx=0) # Log first image
+                # Log original RGB image
+                logger.log_image('train/rgb_original', rgb_original, step=self.current_epoch + 1, batch_idx=batch_idx)
+                # Log predicted inverse depth (masked)
+                logger.log_image('train/pred_inv_depth_masked', viz_pred_inv_depth_masked, step=self.current_epoch + 1, batch_idx=batch_idx)
+                # Log predicted inverse depth (unmasked)
+                logger.log_image('train/pred_inv_depth_unmasked', viz_pred_inv_depth, step=self.current_epoch + 1, batch_idx=batch_idx)
+
+                # If context images are available, log the first warped reference image and photometric error
+                if 'rgb_context_original' in batch and len(batch['rgb_context_original']) > 0:
+                    # Get the first context image
+                    ref_image_original = batch['rgb_context_original'][0][0].permute(1, 2, 0).cpu().numpy() # H, W, 3
+                    logger.log_image('train/ref_image_original', ref_image_original, step=self.current_epoch + 1, batch_idx=batch_idx)
+
+                    # To get warped reference image and photometric error, we need to re-run the photometric loss
+                    # This is not ideal for performance, but necessary for visualization if not already returned by model
+                    # A better approach would be to modify SelfSupModel to return these for logging
+                    
+                    # For now, we'll log the original and predicted depth, and if possible, the mask
+                    # The actual warped image and error map would require more significant changes to the model's forward pass
+                    # to return these intermediate values.
+                    
+                    # If mask is available, log it
+                    if mask is not None:
+                        logger.log_image('train/mask', mask * 255, step=self.current_epoch + 1, batch_idx=batch_idx, is_mask=True)
 
         return {
-            'loss': output['loss'],
-            'metrics': output['metrics']
+            'loss': model_output['loss'],
+            'metrics': model_output['metrics']
         }
 
     def validation_step(self, batch, batch_idx, dataset_idx):
-        """Processes a validation batch."""
+        """
+        Processes a validation batch.
+        """
         output = self.evaluate_depth(batch)
         if self.loggers:
+            # Get first image from batch
+            rgb_original = batch['rgb_original'][0].permute(1, 2, 0).cpu().numpy() # H, W, 3
+
             # Visualize predicted depth
             viz_pred_inv_depth = viz_inv_depth(output['inv_depth'][0])
 
             # Apply mask if available
+            mask = None
             if 'mask' in batch and batch['mask'] is not None:
                 mask = batch['mask'][0].cpu().numpy() # Get mask for the first image
                 if mask.ndim == 3:
                     mask = np.squeeze(mask, axis=0)      # -> (H, W)
                 mask = np.expand_dims(mask, axis=-1) # -> (H, W, 1)
                 # Apply mask to visualization
-                viz_pred_inv_depth = viz_pred_inv_depth * mask.astype(np.uint8)
+                viz_pred_inv_depth_masked = viz_pred_inv_depth * mask.astype(np.uint8)
+            else:
+                viz_pred_inv_depth_masked = viz_pred_inv_depth
 
-            output['viz_pred_inv_depth'] = viz_pred_inv_depth
-
+            # 🆕 Log additional visualizations for validation
             for logger in self.loggers:
-                logger.log_depth('val', batch, output, None,
-                                  self.validation_dataset, world_size(),
-                                  self.config.datasets.validation, step=self.current_epoch + 1, batch_idx=batch_idx, image_idx=0) # Log first image
+                # Log original RGB image
+                logger.log_image('val/rgb_original', rgb_original, step=self.current_epoch + 1, batch_idx=batch_idx)
+                # Log predicted inverse depth (masked)
+                logger.log_image('val/pred_inv_depth_masked', viz_pred_inv_depth_masked, step=self.current_epoch + 1, batch_idx=batch_idx)
+                # Log predicted inverse depth (unmasked)
+                logger.log_image('val/pred_inv_depth_unmasked', viz_pred_inv_depth, step=self.current_epoch + 1, batch_idx=batch_idx)
+                
+                # If mask is available, log it
+                if mask is not None:
+                    logger.log_image('val/mask', mask * 255, step=self.current_epoch + 1, batch_idx=batch_idx, is_mask=True)
+
         return {
             'idx': batch['idx'],
             **output['metrics'],
         }
 
     def test_step(self, batch, *args):
-        """Processes a test batch."""
+        """
+        Processes a test batch.
+        """
         output = self.evaluate_depth(batch)
         save_depth(batch, output, args,
                    self.config.datasets.test,
@@ -299,7 +359,9 @@ class ModelWrapper(torch.nn.Module):
         }
     
     def quick_test_step(self, batch, *args):
-        """빠른 테스트 스텝 (메트릭만 계산, 저장 없음)"""
+        """
+        빠른 테스트 스텝 (메트릭만 계산, 저장 없음)
+        """
         try:
             output = self.evaluate_depth(batch)
             
@@ -324,7 +386,9 @@ class ModelWrapper(torch.nn.Module):
             return {'idx': batch.get('idx', 0), 'abs_rel': 0.0}
 
     def training_epoch_end(self, output_batch):
-        """Finishes a training epoch."""
+        """
+        Finishes a training epoch.
+        """
 
         # Calculate and reduce average loss and metrics per GPU
         loss_and_metrics = average_loss_and_metrics(output_batch, 'avg_train')
@@ -343,7 +407,9 @@ class ModelWrapper(torch.nn.Module):
         }
 
     def validation_epoch_end(self, output_data_batch):
-        """Finishes a validation epoch."""
+        """
+        Finishes a validation epoch.
+        """
 
         # Reduce depth metrics
         metrics_data = all_reduce_metrics(
@@ -383,7 +449,9 @@ class ModelWrapper(torch.nn.Module):
         }
 
     def test_epoch_end(self, output_data_batch):
-        """Finishes a test epoch."""
+        """
+        Finishes a test epoch.
+        """
 
         # Reduce depth metrics
         metrics_data = all_reduce_metrics(
@@ -402,22 +470,30 @@ class ModelWrapper(torch.nn.Module):
         }
 
     def forward(self, *args, **kwargs):
-        """Runs the model and returns the output."""
+        """
+        Runs the model and returns the output.
+        """
         assert self.model is not None, 'Model not defined'
         return self.model(*args, **kwargs)
 
     def depth(self, *args, **kwargs):
-        """Runs the pose network and returns the output."""
+        """
+        Runs the pose network and returns the output.
+        """
         assert self.depth_net is not None, 'Depth network not defined'
         return self.depth_net(*args, **kwargs)
 
     def pose(self, *args, **kwargs):
-        """Runs the depth network and returns the output."""
+        """
+        Runs the depth network and returns the output.
+        """
         assert self.pose_net is not None, 'Pose network not defined'
         return self.pose_net(*args, **kwargs)
 
     def evaluate_depth(self, batch):
-        """Evaluate batch to produce depth metrics."""
+        """
+        Evaluate batch to produce depth metrics.
+        """
         # Get predicted depth
         inv_depths = self.model(batch)['inv_depths']
         depth = inv2depth(inv_depths[0])
@@ -446,7 +522,9 @@ class ModelWrapper(torch.nn.Module):
 
     @on_rank_0
     def print_metrics(self, metrics_data, dataset):
-        """Print depth metrics on rank 0 if available"""
+        """
+        Print depth metrics on rank 0 if available
+        """
         if not metrics_data[0]:
             return
 
@@ -707,13 +785,17 @@ def setup_dataset(config, mode, requirements, **kwargs):
 
 
 def worker_init_fn(worker_id):
-    """Function to initialize workers"""
+    """
+    Function to initialize workers
+    """
     time_seed = np.array(time.time(), dtype=np.int32)
     np.random.seed(time_seed + worker_id)
 
 
 def get_datasampler(dataset, mode):
-    """Distributed data sampler"""
+    """
+    Distributed data sampler
+    """
     return torch.utils.data.distributed.DistributedSampler(
         dataset, shuffle=(mode=='train'),
         num_replicas=world_size(), rank=rank())

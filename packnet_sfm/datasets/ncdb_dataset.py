@@ -91,6 +91,9 @@ class NcdbDataset(Dataset):
             image = Image.open(image_path).convert('RGB')
             depth_png = Image.open(depth_path)
             
+            # 🆕 이미지 크기 추출
+            W, H = image.size # PIL Image.size returns (width, height)
+            
             # VADAS 모델의 intrinsic 리스트를 그대로 저장
             intrinsics_list = torch.tensor(calib_data['intrinsic'], dtype=torch.float32)
             
@@ -102,6 +105,7 @@ class NcdbDataset(Dataset):
                 'div': torch.tensor(calib_data['intrinsic'][8], dtype=torch.float32),
                 'ux': torch.tensor(calib_data['intrinsic'][9], dtype=torch.float32),
                 'uy': torch.tensor(calib_data['intrinsic'][10], dtype=torch.float32),
+                'image_size': (H, W) # 🆕 이미지 크기 추가
             }
             
             # extrinsic (camera to world) 정보 추가
@@ -140,7 +144,7 @@ class NcdbDataset(Dataset):
             'depth': depth_gt,
             'idx': idx,
             'intrinsics': intrinsics_list, # VADAS intrinsic 리스트 전체
-            'distortion_coeffs': distortion_coeffs, # 왜곡 계수 딕셔너리
+            'distortion_coeffs': distortion_coeffs, # 왜곡 계수 딕셔너리 (image_size 포함)
             'extrinsic': extrinsic_matrix, # 카메라 외부 파라미터
             'lidar_to_world': lidar_to_world_matrix, # LiDAR to World 변환
             'filename': stem,

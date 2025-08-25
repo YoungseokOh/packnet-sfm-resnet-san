@@ -1,0 +1,209 @@
+import argparse
+import json
+import os
+import cv2
+import sys
+import shutil
+import yaml
+import numpy as np
+import natsort
+from tqdm import tqdm
+import shutil
+from PIL import Image
+from distutils.util import strtobool
+from pathlib import Path
+import torch
+import sys
+# 프로젝트 경로 추가 (필요에 따라 수정)
+sys.path.append('/workspace/fisheye_test/omnidet')
+
+from scipy.spatial.transform import Rotation
+from collections import OrderedDict
+
+# utils 폴더 내의 Tupperware 클래스 불러오기
+sys.path.append(os.path.dirname(os.path.abspath(os.path.dirname(__file__))))
+from utils import Tupperware
+
+# ---------------------------
+# 기본 유틸리티 함수들
+
+def img_read(path):
+    return cv2.imread(path, 1)
+    
+def read_folder_list(path):
+    folder_list = os.listdir(path)
+    folder_list = natsort.natsorted(folder_list)
+    return folder_list
+
+def printj(dic):
+    return print(json.dumps(dic, indent=4))
+
+def collect_args() -> argparse.Namespace:
+    """커맨드 라인 인자 설정"""
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--config', help="Config file", type=str, default=Path(__file__).parent / "params_nc_a6_quater_parking_cropped.yaml")
+    args = parser.parse_args()
+    return args
+
+def collect_tupperware() -> Tupperware:
+    config = collect_args()
+    params = yaml.safe_load(open(config.config))
+    args = Tupperware(params)
+    return args
+
+# ---------------------------
+# 기존 데이터셋 관련 함수들
+
+def generate_filelist():
+    print('Generating train, test, and validation text files.')
+    from sklearn.model_selection import train_test_split
+    args = collect_tupperware()
+    file_list = [folder for folder in read_folder_list(os.path.join(args.dataset_dir, 'rgb_images'))]
+    
+    train_files = []
+    valid_files = []
+    
+    # 파일 이름의 앞 10자리(숫자)를 기준으로 분리
+    for file in file_list:
+        try:
+            file_num = int(file[:10])
+        except Exception as e:
+            print(f"Error extracting number from {file}: {e}")
+            continue
+        
+        if file_num < 50000:
+            train_files.append(file)
+        else:
+            valid_files.append(file)
+    
+    # valid_files가 있으면 50:50 비율로 test와 val 분할
+    if valid_files:
+        test, val = train_test_split(valid_files, test_size=0.5, random_state=42)
+    else:
+        test = []
+        val = []
+    
+    with open(os.path.join(args.dataset_dir, 'train.txt'), "w") as output:
+        for file in tqdm(train_files, desc="Train files"):
+            output.write(file + '\n')
+    
+    with open(os.path.join(args.dataset_dir, 'test.txt'), "w") as output:
+        for file in tqdm(test, desc="Test files"):
+            output.write(file + '\n')
+    
+    with open(os.path.join(args.dataset_dir, 'val.txt'), "w") as output:
+        for file in tqdm(val, desc="Val files"):
+            output.write(file + '\n')
+
+
+def generate_json():
+    print(f'Generating json files')
+    args = collect_tupperware()
+    json_data = OrderedDict()
+    folder_list = [folder for folder in read_folder_list(os.path.join(args.dataset_dir, 'rgb_images'))]
+
+    # 대상 디렉터리 경로 생성
+    target_dir = os.path.join(args.dataset_dir, "calibration_data", "calibration_ncdb_A6_quater_demo")
+    os.makedirs(target_dir, exist_ok=True)
+
+    angles_deg = [3.2382, 48.2648, -3.013]
+    r_obj = Rotation.from_euler('xyz', angles_deg, degrees=True)
+    quat_xyzw = r_obj.as_quat()
+    tx, ty, tz = -1.124918, -0.004187, 0.831223
+
+    json_data['extrinsic'] = {'quaternion': [0.0, 0.0, 0.0, 0.0], 'translation':[0.0, 0.0, 0.0]}
+    json_data['intrinsic'] = {'aspect_ratio' : 1.0, 'cx_offset': 18.8009, 'cy_offset': 51.949, 'height':1152, 
+                            'k1': 501.06, 'k2': 16.421, 'k3': 8.5094, 'k4': 3.3852,
+                            'model' : "radial_poly", "poly_order": 4, "width": 1920}
+    json_data['name'] = 'RV'
+    for file in tqdm(folder_list):
+        json_path = os.path.join(target_dir, f"{file.split('.')[0]}.json")
+        with open(json_path, 'w', encoding="utf-8") as make_json:
+            json.dump(json_data, make_json, ensure_ascii=False, indent="\t")
+
+def natural_keys(text):
+    """문자열을 숫자와 비숫자 부분으로 분리하여 자연 정렬 키 생성"""
+    import re
+    return [int(c) if c.isdigit() else c for c in re.split(r'(\d+)', text)]
+
+def generate_curprev(apply_flip=True, flip_code=1):
+    print('Generating current and previous images')
+    args = collect_tupperware()
+    
+    folder_list = sorted(
+        [folder for folder in read_folder_list(args.dataset_dir) if folder.startswith('A6_TP')],
+        key=natural_keys
+    )
+    
+    cur_folder = os.path.join(args.dataset_dir, 'rgb_images')
+    pre_folder = os.path.join(args.dataset_dir, 'previous_images')
+    
+    os.makedirs(cur_folder, exist_ok=True)
+    os.makedirs(pre_folder, exist_ok=True)
+    
+    global_file_num = 0         # 일반 이미지용 카운터
+    global_valid_file_num = 50000  # valid 이미지용 카운터 (50000번대부터 시작)
+    
+    for tp_folder in tqdm(folder_list, desc="TP Folders"):
+        origin_path = os.path.join(args.dataset_dir, tp_folder)
+        subfolders = sorted(read_folder_list(origin_path), key=natural_keys)
+        for folder in tqdm(subfolders, desc="Subfolders"):
+            # 폴더 이름에서 '_' 뒤의 숫자를 추출 (예: "batch_2003")
+            try:
+                folder_num = int(folder.split('_')[-1])
+            except Exception:
+                folder_num = 0  # 추출 실패 시 기본값 0
+            
+            folder_path = os.path.join(origin_path, folder)
+            files = sorted(read_folder_list(folder_path))
+            if len(files) % 2 != 0:
+                print(f"Warning: {folder_path} contains an odd number of images.")
+            for j in range(0, len(files) - 1, 2):
+                cur_img_path = os.path.join(folder_path, files[j])
+                prev_img_path = os.path.join(folder_path, files[j+1])
+                cur_img = img_read(cur_img_path)
+                prev_img = img_read(prev_img_path)
+                
+                if apply_flip:
+                    cur_img = cv2.flip(cur_img, flip_code)
+                    prev_img = cv2.flip(prev_img, flip_code)
+                
+                # 폴더 이름의 숫자가 2000 초과면 valid 이미지로 취급하여 50000번대 번호 할당
+                if folder_num > 6000:
+                    file_num = global_valid_file_num
+                    global_valid_file_num += 1
+                else:
+                    file_num = global_file_num
+                    global_file_num += 1
+                
+                cv2.imwrite(os.path.join(cur_folder, f'{file_num:010d}_RV.jpg'), cur_img)
+                cv2.imwrite(os.path.join(pre_folder, f'{file_num:010d}_RV_prev.jpg'), prev_img)
+
+
+def generate_cropped_image():
+    cropped_coords = (0, 0, 1920, 1152)  # A6
+    args = collect_tupperware()
+    folder_list = [folder for folder in read_folder_list(args.dataset_dir) if folder.startswith('A6_TP')]
+    file_num = 0
+    for i in folder_list:
+        new_i_path = os.path.join(args.dataset_dir, i + '_crop')
+        origin_path = os.path.join(args.dataset_dir, i)
+        if not os.path.exists(new_i_path):
+            os.makedirs(new_i_path)
+        for folder in tqdm(read_folder_list(os.path.join(args.dataset_dir, i))):
+            new_folder_path = os.path.join(new_i_path, folder)
+            folder_list_sub = os.path.join(origin_path, folder)
+            if not os.path.exists(new_folder_path):
+                os.makedirs(new_folder_path)
+            for file in read_folder_list(folder_list_sub):
+                image = Image.open(os.path.join(folder_list_sub, file)).convert('RGB')
+                image.crop(cropped_coords).save(os.path.join(new_folder_path, file))
+
+
+# ---------------------------
+if __name__ == "__main__":
+    # 실행할 함수 선택 (원하는 기능의 주석을 해제하세요)
+    # generate_curprev(apply_flip=False, flip_code=1)
+    # generate_json()
+    generate_filelist()
+    # generate_cropped_image()

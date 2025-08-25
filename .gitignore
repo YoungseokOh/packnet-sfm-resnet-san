@@ -36,18 +36,19 @@ enhanced_analysis_results/
 *.npz
 *.png
 *.pcd
-*.jpg
+# *.jpg
+# *.md
+# *.txt
+
 client.py
 client_infer.py
-
 eval_npu.py
-
 .github/
 ncdb-cls/
-ncdb-cls-sample/
 outputs/
-*.md
-*.txt
+ncdb-cls-sample/
+KITTI_tiny/
+
 sync_tool.py
 camera_lidar_projector.py
 generate_lut.py

@@ -42,7 +42,6 @@ class Camera(nn.Module):
         self.Tcw = self.Tcw.to(*args, **kwargs)
         return self
 
-########################################################################################################################
 
     @property
     def fx(self):
@@ -81,7 +80,6 @@ class Camera(nn.Module):
         Kinv[:, 1, 2] = -1. * self.cy / self.fy
         return Kinv
 
-########################################################################################################################
 
     def scaled(self, x_scale, y_scale=None):
         """
@@ -109,7 +107,6 @@ class Camera(nn.Module):
         K = scale_intrinsics(self.K.clone(), x_scale, y_scale)
         return Camera(K, Tcw=self.Tcw)
 
-########################################################################################################################
 
     def reconstruct(self, depth, frame='w'):
         """
@@ -241,6 +238,78 @@ class FisheyeCamera(nn.Module):
     def Twc(self):
         """World -> Camera pose transformation (inverse of Tcw)"""
         return self.Tcw.inverse()
+
+    def reconstruct(self, depth, frame='w'):
+        """
+        Reconstructs pixel-wise 3D points from a depth map using the fisheye model.
+
+        Parameters
+        ----------
+        depth : torch.Tensor [B,1,H,W]
+            Depth map for the camera
+        frame : 'w' or 'c'
+            Reference frame: 'c' for camera and 'w' for world
+
+        Returns
+        -------
+        points : torch.tensor [B,3,H,W]
+            Pixel-wise 3D points
+        """
+        B, C, H, W = depth.shape
+        assert C == 1
+
+        # Create flat index grid
+        grid = image_grid(B, H, W, depth.dtype, depth.device, normalized=False)  # [B,3,H,W]
+        flat_grid = grid.view(B, 3, -1)  # [B,3,HW]
+
+        # Extract pixel coordinates (u, v)
+        u_pixels = flat_grid[:, 0, :]
+        v_pixels = flat_grid[:, 1, :]
+
+        # Denormalize pixel coordinates to get original pixel values
+        u = u_pixels
+        v = v_pixels
+
+        # Inverse of final pixel coordinates using intrinsic parameters
+        x_dist = (u - self.ux.unsqueeze(1)) / self.s.unsqueeze(1)
+        y_dist = (v - self.uy.unsqueeze(1)) / self.div.unsqueeze(1)
+
+        # Calculate distorted radius r_d
+        r_d = torch.sqrt(x_dist**2 + y_dist**2)
+
+        # Inverse of polynomial distortion to theta
+        # This is the most complex part, as it requires solving a polynomial.
+        # For simplicity, we will approximate by assuming theta_poly is approximately theta for small r_d
+        # A more accurate solution would involve numerical methods or a pre-computed lookup table.
+        # For now, we'll use a simplified inverse of the polynomial.
+        # This is a placeholder and might need more robust implementation for high accuracy.
+        theta = r_d # Approximation: assuming r_d is close to theta for inverse.
+
+        # Inverse of r = tan(theta)
+        r = torch.tan(theta)
+
+        # Avoid division by zero for r_d
+        r_d_safe = r_d.clone()
+        r_d_safe[r_d < sys.float_info.epsilon] = sys.float_info.epsilon
+
+        # Inverse of projection to distorted image coordinates
+        x_norm = (r / r_d_safe) * x_dist
+        y_norm = (r / r_d_safe) * y_dist
+
+        # Scale rays to metric depth
+        Xc = torch.stack([x_norm * depth.view(B, -1),
+                          y_norm * depth.view(B, -1),
+                          depth.view(B, -1)], dim=1) # [B,3,HW]
+
+        # If in camera frame of reference
+        if frame == 'c':
+            return Xc.view(B, 3, H, W)
+        # If in world frame of reference
+        elif frame == 'w':
+            return (self.Twc @ Xc).view(B, 3, H, W)
+        # If none of the above
+        else:
+            raise ValueError('Unknown reference frame {}'.format(frame))
 
     def project(self, X, frame='w'):
         """

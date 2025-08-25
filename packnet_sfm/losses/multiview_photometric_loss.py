@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 
 from packnet_sfm.utils.image import match_scales
-from packnet_sfm.geometry.camera import Camera
+from packnet_sfm.geometry.camera import FisheyeCamera # Changed from Camera to FisheyeCamera
 from packnet_sfm.geometry.camera_utils import view_synthesis
 from packnet_sfm.utils.depth import calc_smoothness, inv2depth
 from packnet_sfm.losses.loss_base import LossBase, ProgressiveScaling
@@ -124,7 +124,7 @@ class MultiViewPhotometricLoss(LossBase):
 
 ########################################################################################################################
 
-    def warp_ref_image(self, inv_depths, ref_image, K, ref_K, pose):
+    def warp_ref_image(self, inv_depths, ref_image, intrinsics, ref_intrinsics, poses, image_size): # Changed K, ref_K to intrinsics, ref_intrinsics, added image_size
         """
         Warps a reference image to produce a reconstruction of the original one.
 
@@ -134,17 +134,19 @@ class MultiViewPhotometricLoss(LossBase):
             Inverse depth map of the original image
         ref_image : torch.Tensor [B,3,H,W]
             Reference RGB image
-        K : torch.Tensor [B,3,3]
-            Original camera intrinsics
-        ref_K : torch.Tensor [B,3,3]
-            Reference camera intrinsics
-        pose : Pose
+        intrinsics : dict
+            Original camera intrinsics (FisheyeCamera format)
+        ref_intrinsics : dict
+            Reference camera intrinsics (FisheyeCamera format)
+        poses : Pose
             Original -> Reference camera transformation
+        image_size : tuple (H, W)
+            The size of the image.
 
         Returns
         -------
         ref_warped : torch.Tensor [B,3,H,W]
-            Warped reference image (reconstructing the original one)
+            Warped reference image in the original frame of reference
         """
         B, _, H, W = ref_image.shape
         device = ref_image.get_device()
@@ -152,9 +154,33 @@ class MultiViewPhotometricLoss(LossBase):
         cams, ref_cams = [], []
         for i in range(self.n):
             _, _, DH, DW = inv_depths[i].shape
-            scale_factor = DW / float(W)
-            cams.append(Camera(K=K.float()).scaled(scale_factor).to(device))
-            ref_cams.append(Camera(K=ref_K.float(), Tcw=pose).scaled(scale_factor).to(device))
+            scale_factor_w = DW / float(W)
+            scale_factor_h = DH / float(H)
+            
+            # Create FisheyeCamera instances
+            # Note: intrinsics['k'], intrinsics['s'], etc. are already tensors from NcdbDataset
+            # We need to ensure they are on the correct device and have the correct batch size
+            
+            # For original camera
+            scaled_intrinsics = {
+                'k': intrinsics['k'].clone().to(device),
+                's': intrinsics['s'].clone().to(device),
+                'div': intrinsics['div'].clone().to(device),
+                'ux': (intrinsics['ux'].clone() + 0.5) * scale_factor_w - 0.5,
+                'uy': (intrinsics['uy'].clone() + 0.5) * scale_factor_h - 0.5,
+            }
+            cams.append(FisheyeCamera(intrinsics=scaled_intrinsics, image_size=(DH, DW)).to(device))
+
+            # For reference camera
+            scaled_ref_intrinsics = {
+                'k': ref_intrinsics['k'].clone().to(device),
+                's': ref_intrinsics['s'].clone().to(device),
+                'div': ref_intrinsics['div'].clone().to(device),
+                'ux': (ref_intrinsics['ux'].clone() + 0.5) * scale_factor_w - 0.5,
+                'uy': (ref_intrinsics['uy'].clone() + 0.5) * scale_factor_h - 0.5,
+            }
+            ref_cams.append(FisheyeCamera(intrinsics=scaled_ref_intrinsics, Tcw=poses, image_size=(DH, DW)).to(device))
+        
         # View synthesis
         depths = [inv2depth(inv_depths[i]) for i in range(self.n)]
         ref_images = match_scales(ref_image, inv_depths, self.n)
@@ -185,7 +211,7 @@ class MultiViewPhotometricLoss(LossBase):
         ssim_value = SSIM(x, y, C1=self.C1, C2=self.C2, kernel_size=kernel_size)
         return torch.clamp((1. - ssim_value) / 2., 0., 1.)
 
-    def calc_photometric_loss(self, t_est, images):
+    def calc_photometric_loss(self, t_est, images, masks_scaled=None):
         """
         Calculates the photometric loss (L1 + SSIM)
         Parameters
@@ -194,6 +220,8 @@ class MultiViewPhotometricLoss(LossBase):
             List of warped reference images in multiple scales
         images : list of torch.Tensor [B,3,H,W]
             List of original images in multiple scales
+        masks_scaled : list of torch.Tensor [B,1,H,W], optional
+            List of binary masks for valid pixels, scaled to match image scales
 
         Returns
         -------
@@ -219,6 +247,18 @@ class MultiViewPhotometricLoss(LossBase):
                 mean, std = photometric_loss[i].mean(), photometric_loss[i].std()
                 photometric_loss[i] = torch.clamp(
                     photometric_loss[i], max=float(mean + self.clip_loss * std))
+        
+        # Apply mask to photometric loss if provided
+        if masks_scaled is not None:
+            for i in range(self.n):
+                # Ensure mask has 3 channels to multiply with RGB loss
+                # Or, if loss is already meaned to 1 channel, ensure mask is 1 channel
+                if photometric_loss[i].shape[1] == 3 and masks_scaled[i].shape[1] == 1:
+                    mask_for_loss = masks_scaled[i].expand_as(photometric_loss[i])
+                else:
+                    mask_for_loss = masks_scaled[i]
+                photometric_loss[i] = photometric_loss[i] * mask_for_loss
+
         # Return total photometric loss
         return photometric_loss
 
@@ -285,7 +325,7 @@ class MultiViewPhotometricLoss(LossBase):
 ########################################################################################################################
 
     def forward(self, image, context, inv_depths,
-                K, ref_K, poses, return_logs=False, progress=0.0):
+                intrinsics, ref_intrinsics, poses, return_logs=False, progress=0.0, mask=None): # Changed K, ref_K to intrinsics, ref_intrinsics
         """
         Calculates training photometric loss.
 
@@ -297,16 +337,18 @@ class MultiViewPhotometricLoss(LossBase):
             Context containing a list of reference images
         inv_depths : list of torch.Tensor [B,1,H,W]
             Predicted depth maps for the original image, in all scales
-        K : torch.Tensor [B,3,3]
-            Original camera intrinsics
-        ref_K : torch.Tensor [B,3,3]
-            Reference camera intrinsics
+        intrinsics : dict
+            Original camera intrinsics (FisheyeCamera format)
+        ref_intrinsics : dict
+            Reference camera intrinsics (FisheyeCamera format)
         poses : list of Pose
             Camera transformation between original and context
         return_logs : bool
             True if logs are saved for visualization
         progress : float
             Training percentage
+        mask : torch.Tensor [B,1,H,W], optional
+            Binary mask for valid pixels
 
         Returns
         -------
@@ -318,18 +360,28 @@ class MultiViewPhotometricLoss(LossBase):
         # Loop over all reference images
         photometric_losses = [[] for _ in range(self.n)]
         images = match_scales(image, inv_depths, self.n)
+        # Scale mask if provided
+        if mask is not None:
+            masks_scaled = match_scales(mask, inv_depths, self.n, mode='nearest', align_corners=None)
+        else:
+            masks_scaled = [None] * self.n
+
+        # Get image size from the first image in the batch
+        _, _, H, W = image.shape
+        image_size = (H, W)
+
         for j, (ref_image, pose) in enumerate(zip(context, poses)):
             # Calculate warped images
-            ref_warped = self.warp_ref_image(inv_depths, ref_image, K, ref_K, pose)
+            ref_warped = self.warp_ref_image(inv_depths, ref_image, intrinsics, ref_intrinsics, pose, image_size) # Pass image_size
             # Calculate and store image loss
-            photometric_loss = self.calc_photometric_loss(ref_warped, images)
+            photometric_loss = self.calc_photometric_loss(ref_warped, images, masks_scaled) # Pass masks_scaled
             for i in range(self.n):
                 photometric_losses[i].append(photometric_loss[i])
             # If using automask
             if self.automask_loss:
                 # Calculate and store unwarped image loss
                 ref_images = match_scales(ref_image, inv_depths, self.n)
-                unwarped_image_loss = self.calc_photometric_loss(ref_images, images)
+                unwarped_image_loss = self.calc_photometric_loss(ref_images, images, masks_scaled) # Pass masks_scaled
                 for i in range(self.n):
                     photometric_losses[i].append(unwarped_image_loss[i])
         # Calculate reduced photometric loss
