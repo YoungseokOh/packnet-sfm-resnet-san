@@ -140,6 +140,30 @@ RUN mkdir /workspace
 WORKDIR /workspace
 RUN git clone https://github.com/NVIDIA/apex.git
 WORKDIR /workspace/apex
+
+# --- PATCH START: make apex setup.py Py3.9-safe and ensure build deps ---
+# Replace 'int | None' with 'Optional[int]' and ensure 'Optional' import
+RUN python${PYTHON_VERSION} - <<'PY'
+from pathlib import Path
+import re
+p = Path("setup.py")
+s = p.read_text(encoding="utf-8")
+# ensure Optional import (insert or augment existing import)
+if "from typing import" in s:
+    if "Optional" not in s:
+        s = re.sub(r"from typing import ([^\n]+)", r"from typing import Optional, \1", s, count=1)
+else:
+    s = "from typing import Optional\n" + s
+# replace all occurrences of 'int | None' with 'Optional[int]'
+s = re.sub(r"(?<!\w)int\s*\|\s*None(?!\w)", "Optional[int]", s)
+p.write_text(s, encoding="utf-8")
+print("apex setup.py patched for Python 3.9")
+PY
+
+# Guard against NumPy 2 and ensure pybind11 new enough for mixed trees
+RUN python${PYTHON_VERSION} -m pip install --no-cache-dir "numpy<2" "pybind11>=2.12"
+# --- PATCH END ---
+
 RUN python${PYTHON_VERSION} -m pip install -v --no-cache-dir --no-build-isolation --global-option="--cpp_ext" --global-option="--cuda_ext" .
 ENV PYTHONPATH="/workspace/apex:$PYTHONPATH"
 WORKDIR /workspace
