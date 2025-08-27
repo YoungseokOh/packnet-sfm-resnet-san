@@ -253,38 +253,45 @@ class ModelWrapper(torch.nn.Module):
 
         # Log training images at a certain interval (e.g., every 100 steps)
         if self.loggers and batch_idx % self.config.tensorboard.log_frequency == 0: # Log frequency from config
-            # Get first image from batch
-            rgb_original = batch['rgb_original'][0].permute(1, 2, 0).cpu().numpy() # H, W, 3
+            # Get first image from batch - keep as tensor in (C, H, W) format
+            rgb_original = batch['rgb_original'][0].cpu()  # (C, H, W)
             
             # Visualize predicted depth
             viz_pred_inv_depth = viz_inv_depth(model_output['inv_depths'][0][0])
+            
+            # Convert to tensor and ensure float32
+            if isinstance(viz_pred_inv_depth, np.ndarray):
+                viz_pred_inv_depth = torch.from_numpy(viz_pred_inv_depth).float()
+            viz_pred_inv_depth = viz_pred_inv_depth.permute(2, 0, 1)  # (H, W, C) -> (C, H, W)
 
             # Apply mask if available
             mask = None
             if 'mask' in batch and batch['mask'] is not None:
-                mask = batch['mask'][0].cpu().numpy() # Get mask for the first image
-                if mask.ndim == 3:
-                    mask = np.squeeze(mask, axis=0)      # -> (H, W)
-                mask = np.expand_dims(mask, axis=-1) # -> (H, W, 1)
+                mask = batch['mask'][0].cpu()  # Keep as tensor (C, H, W)
+                if mask.dim() == 3 and mask.shape[0] == 1:
+                    mask = mask.squeeze(0)  # (1, H, W) -> (H, W)
+                elif mask.dim() == 2:
+                    pass  # Already (H, W)
+                
                 # Apply mask to visualization
-                viz_pred_inv_depth_masked = viz_pred_inv_depth * mask.astype(np.uint8)
+                viz_pred_inv_depth_masked = viz_pred_inv_depth * mask.unsqueeze(0).float()
             else:
                 viz_pred_inv_depth_masked = viz_pred_inv_depth
 
             # 🆕 Log additional visualizations for self-supervised learning
             for logger in self.loggers:
                 # Log original RGB image
-                logger.log_image('train/rgb_original', rgb_original, step=self.current_epoch + 1, batch_idx=batch_idx)
+                logger.writer.add_image('train/rgb_original', rgb_original, global_step=self.current_epoch + 1)
                 # Log predicted inverse depth (masked)
-                logger.log_image('train/pred_inv_depth_masked', viz_pred_inv_depth_masked, step=self.current_epoch + 1, batch_idx=batch_idx)
+                logger.writer.add_image('train/pred_inv_depth_masked', viz_pred_inv_depth_masked, global_step=self.current_epoch + 1)
                 # Log predicted inverse depth (unmasked)
-                logger.log_image('train/pred_inv_depth_unmasked', viz_pred_inv_depth, step=self.current_epoch + 1, batch_idx=batch_idx)
+                logger.writer.add_image('train/pred_inv_depth_unmasked', viz_pred_inv_depth, global_step=self.current_epoch + 1)
 
                 # If context images are available, log the first warped reference image and photometric error
                 if 'rgb_context_original' in batch and len(batch['rgb_context_original']) > 0:
                     # Get the first context image
-                    ref_image_original = batch['rgb_context_original'][0][0].permute(1, 2, 0).cpu().numpy() # H, W, 3
-                    logger.log_image('train/ref_image_original', ref_image_original, step=self.current_epoch + 1, batch_idx=batch_idx)
+                    ref_image_original = batch['rgb_context_original'][0][0].cpu()  # (C, H, W)
+                    logger.writer.add_image('train/ref_image_original', ref_image_original, global_step=self.current_epoch + 1)
 
                     # To get warped reference image and photometric error, we need to re-run the photometric loss
                     # This is not ideal for performance, but necessary for visualization if not already returned by model
@@ -296,7 +303,7 @@ class ModelWrapper(torch.nn.Module):
                     
                     # If mask is available, log it
                     if mask is not None:
-                        logger.log_image('train/mask', mask * 255, step=self.current_epoch + 1, batch_idx=batch_idx, is_mask=True)
+                        logger.writer.add_image('train/mask', mask.unsqueeze(0).float(), global_step=self.current_epoch + 1)
 
         return {
             'loss': model_output['loss'],
