@@ -78,8 +78,8 @@ def create_combined_splits(dataset_a_root, dataset_b_root, output_dir,
 
 if __name__ == '__main__':
     # 예시 사용법 (실제 경로에 맞게 수정하세요)
-    dataset_a_path = '/workspace/packnet-sfm/ncdb-cls/2025-07-11_15-00-27_410410_A/synced_data' # 예시 경로, 실제 경로로 변경 필요
-    dataset_b_path = '/workspace/packnet-sfm/ncdb-cls/2025-07-11_15-39-30_243127_B/synced_data' # 예시 경로, 실제 경로로 변경 필요
-    output_splits_dir = '/workspace/packnet-sfm/ncdb-cls/splits' # 예시 경로, 실제 경로로 변경 필요
+    dataset_a_path = '/workspace/data/ncdb-cls/2025-07-11_15-00-27_410410_A/synced_data' # 예시 경로, 실제 경로로 변경 필요
+    dataset_b_path = '/workspace/data/ncdb-cls/2025-07-11_15-39-30_243127_B/synced_data' # 예시 경로, 실제 경로로 변경 필요
+    output_splits_dir = '/workspace/data/ncdb-cls/splits' # 예시 경로, 실제 경로로 변경 필요
 
     create_combined_splits(dataset_a_path, dataset_b_path, output_splits_dir)

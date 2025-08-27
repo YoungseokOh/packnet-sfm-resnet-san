@@ -1,4 +1,3 @@
-
 import os
 import torch
 from datetime import datetime
@@ -60,7 +59,7 @@ def set_name(config):
         Updated run name
     """
     # If there is a name already, do nothing
-    if config.name is not '':
+    if config.name != '':  # Fixed syntax warning
         return config.name
     else:
         # Create a name based on available information
@@ -85,7 +84,7 @@ def set_checkpoint(config):
         Updated model configuration
     """
     # If checkpoint is enabled
-    if config.checkpoint.filepath is not '':
+    if config.checkpoint.filepath != '':  # Fixed syntax warning
         # Create proper monitor string
         config.checkpoint.monitor = os.path.join('{}-{}'.format(
             prepare_dataset_prefix(config.datasets.validation,
@@ -96,14 +95,12 @@ def set_checkpoint(config):
             config.checkpoint.filepath, config.name,
             '{epoch:02d}_{%s:.3f}' % config.checkpoint.monitor)
         # Set s3 url
-        if config.checkpoint.s3_path is not '':
+        if config.checkpoint.s3_path != '':  # Fixed syntax warning
             config.checkpoint.s3_url = s3_url(config)
     else:
         # If not saving checkpoint, do not sync to s3
         config.checkpoint.s3_path = ''
     return config.checkpoint
-
-
 
 
 def get_default_config(cfg_default):
@@ -238,12 +235,12 @@ def prepare_train_config(config):
     if config.prepared:
         return config
 
-    # Asserts
-    assert config.wandb.dry_run or config.wandb.entity is not '', \
+    # Asserts - Fixed syntax warnings
+    assert config.wandb.dry_run or config.wandb.entity != '', \
         'You need a wandb entity'
-    assert config.wandb.dry_run or config.wandb.project is not '', \
+    assert config.wandb.dry_run or config.wandb.project != '', \
         'You need a wandb project'
-    assert config.checkpoint.filepath is '' or \
+    assert config.checkpoint.filepath == '' or \
            (config.checkpoint.monitor_index < len(config.datasets.validation.split)), \
         'You need to monitor a valid dataset'
 

@@ -26,7 +26,7 @@ def save_depth(batch, output, args, dataset, save):
         Save configuration
     """
     # If there is no save folder, don't save
-    if save.folder is '':
+    if save.folder == '':  # Fix the syntax warning
         return
 
     # If we want to save

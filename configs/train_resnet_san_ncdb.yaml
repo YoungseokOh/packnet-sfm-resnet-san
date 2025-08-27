@@ -32,20 +32,20 @@ datasets:
     train:
         batch_size: 2 # Reduced for larger image size
         dataset: ['ncdb']
-        path: ['/workspace/packnet-sfm/ncdb-cls']
+        path: ['/workspace/data/ncdb-cls']
         split: ['splits/combined_train.json']
         repeat: [1]
         mask_file: ['binary_mask.png']
     validation:
         batch_size: 1 # Reduced for larger image size
         dataset: ['ncdb']
-        path: ['/workspace/packnet-sfm/ncdb-cls']
+        path: ['/workspace/data/ncdb-cls']
         split: ['splits/combined_val.json']
         mask_file: ['binary_mask.png']
     test:
         batch_size: 1 # Reduced for larger image size
         dataset: ['ncdb']
-        path: ['/workspace/packnet-sfm/ncdb-cls']
+        path: ['/workspace/data/ncdb-cls']
         split: ['splits/combined_test.json']
         mask_file: ['binary_mask.png']
 
@@ -59,11 +59,11 @@ arch:
     eval_subset_size: 100
 
 checkpoint:
-    filepath: 'checkpoints/resnetsan01_mask_test/'
+    filepath: 'checkpoints/resnetsan01_new_depth_map_test/'
     save_top_k: -1
 
 save:
-    folder: 'outputs/resnetsan01_mask_test/'
+    folder: 'outputs/resnetsan01_new_depth_map_test/'
 
 tensorboard:
     dry_run: false

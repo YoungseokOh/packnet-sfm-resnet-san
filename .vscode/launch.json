@@ -85,8 +85,8 @@
             "args": 
             [
                 // "configs/train_resnet_san_kitti.yaml"
-                // "configs/train_resnet_san_ncdb.yaml"
-                "configs/train_resnet_selfsup_ncdb.yaml"
+                "configs/train_resnet_san_ncdb.yaml"
+                // "configs/train_resnet_selfsup_ncdb.yaml"
                 // "configs/train_resnet_san_ncdb_w_respt.yaml"
             ],
 

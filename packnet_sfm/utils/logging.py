@@ -120,7 +120,7 @@ def print_config(config, color=('blue', 'red', 'cyan'), attrs=('bold', 'dark')):
         name += pcolor1(' -> ') + \
                 pcolor2('{}'.format(config.wandb.url))
     # Add s3 link if available
-    if config.checkpoint.s3_path is not '':
+    if config.checkpoint.s3_path != '':  # Fix the syntax warning
         name += pcolor1('\n### s3:') + \
                 pcolor2(' {}'.format(config.checkpoint.s3_url))
     # Create header string

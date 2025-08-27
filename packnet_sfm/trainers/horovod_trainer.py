@@ -2,23 +2,23 @@
 
 import os
 import torch
-import horovod.torch as hvd
 import traceback
 import json
 from packnet_sfm.trainers.base_trainer import BaseTrainer, sample_to_cuda
 from packnet_sfm.utils.logging import print_config, pcolor
 from packnet_sfm.utils.logging import AvgMeter
 from tqdm import tqdm
-from packnet_sfm.utils.config import s3_url # Add s3_url import
+from packnet_sfm.utils.config import s3_url
 
 
 class HorovodTrainer(BaseTrainer):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-        hvd.init()
-        torch.set_num_threads(int(os.environ.get("OMP_NUM_THREADS", 1)))
-        torch.cuda.set_device(hvd.local_rank())
+        # Single GPU setup
+        print("🔧 Running in single GPU mode")
+        torch.cuda.set_device(0)  # Use first GPU
+            
         torch.backends.cudnn.benchmark = False
         torch.backends.cudnn.deterministic = True
 
@@ -29,31 +29,32 @@ class HorovodTrainer(BaseTrainer):
         self.eval_during_training = kwargs.get('eval_during_training', True)
         self.eval_progress_interval = kwargs.get('eval_progress_interval', 0.1)
         self.eval_subset_size = kwargs.get('eval_subset_size', 50)
-        # ❗ 추가: 설정된 값을 명확히 확인하기 위한 로그
+        
         if self.is_rank_0:
             print(pcolor('  |  eval_subset_size: {}'.format(self.eval_subset_size), 'yellow'))
+            print(pcolor('  |  Single GPU mode (no Horovod)', 'yellow'))
 
     @property
     def proc_rank(self):
-        return hvd.rank()
+        return 0  # Always rank 0 in single GPU mode
 
     @property
     def world_size(self):
-        return hvd.size()
+        return 1  # Always world size 1 in single GPU mode
 
     def fit(self, module):
         # Prepare module for training
         self.module = module
         module.trainer = self
+        
         # Handle loggers and checkpoint path updates
         if module.loggers:
             for logger in module.loggers:
-                # This part specifically handles WandbLogger for run naming and config logging
                 if hasattr(logger, 'run_name') and hasattr(logger, 'run_url') and hasattr(logger, 'log_config') and not module.config.wandb.dry_run:
                     module.config.name = module.config.wandb.name = logger.run_name
                     module.config.wandb.url = logger.run_url
                     # If we are saving models we need to update the path
-                    if module.config.checkpoint.filepath is not '':
+                    if module.config.checkpoint.filepath != '':
                         # Change checkpoint filepath
                         filepath = module.config.checkpoint.filepath.split('/')
                         filepath[-2] = module.config.name
@@ -72,22 +73,18 @@ class HorovodTrainer(BaseTrainer):
         module = module.to('cuda')
         module.configure_optimizers()
 
-        # Create distributed optimizer
-        compression = hvd.Compression.none
-        optimizer = hvd.DistributedOptimizer(module.optimizer,
-            named_parameters=module.named_parameters(), compression=compression)
+        # Use regular optimizer (no distribution)
+        optimizer = module.optimizer
         scheduler = module.scheduler
 
         # Get train and val dataloaders
         train_dataloader = module.train_dataloader()
         val_dataloaders = module.val_dataloader()
 
-        # 🆕 Validation 데이터로더를 중간 평가에도 활용
+        # Setup evaluation dataloaders
         self.eval_dataloaders = None
         if self.eval_during_training and val_dataloaders:
             try:
-                # validation 데이터로더를 그대로 사용
-                # validation은 이미 RGB-only와 RGB+LiDAR 둘 다 포함
                 self.eval_dataloaders = val_dataloaders
                 if self.is_rank_0:
                     print("✅ Using validation dataloaders for intermediate evaluation:")
@@ -111,7 +108,6 @@ class HorovodTrainer(BaseTrainer):
         for epoch in range(module.current_epoch, self.max_epochs):
             self.train_with_eval(train_dataloader, module, optimizer)
             validation_output = self.validate(val_dataloaders, module)
-            # 🆕 평가 결과 저장
             self._save_eval_results(epoch, validation_output)
             self.check_and_save(module, validation_output)
             module.current_epoch += 1
@@ -211,7 +207,17 @@ class HorovodTrainer(BaseTrainer):
             return {}
 
     def train_with_eval(self, dataloader, module, optimizer):
-        """중간 평가가 포함된 훈련 - 간소화된 버전"""
+        """IPC를 활용한 공유 메모리 최적화 훈련 메서드"""
+        
+        # 🆕 IPC 공유 메모리 전략 설정
+        import torch.multiprocessing as mp
+        try:
+            mp.set_sharing_strategy('file_system')
+            print("✅ IPC sharing strategy set to file_system")
+        except RuntimeError:
+            # 이미 설정된 경우 무시
+            pass
+        
         module.train()
 
         if hasattr(dataloader.sampler, "set_epoch"):

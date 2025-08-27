@@ -37,7 +37,7 @@ def train(file):
         **.yaml** for a yacs configuration file or a
         **.ckpt** for a pre-trained checkpoint file.
     """
-    # Initialize horovod
+    # Initialize horovod (mock for single GPU)
     hvd_init()
 
     # Produce configuration and checkpoint from filename
@@ -69,7 +69,7 @@ def train(file):
     # Initialize model wrapper
     model_wrapper = ModelWrapper(config, resume=ckpt, loggers=loggers)
 
-    # Create trainer with args.arch parameters
+    # Create trainer with arch parameters
     trainer = HorovodTrainer(**config.arch, checkpoint=checkpoint)
     
     # Train model

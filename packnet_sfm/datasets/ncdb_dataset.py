@@ -80,8 +80,8 @@ class NcdbDataset(Dataset):
         # dataset_root = Path(entry['dataset_root']) # 이 줄은 더 이상 필요 없음
         
         # Construct paths using self.dataset_root
-        image_path = self.dataset_root / entry['dataset_root'] / 'image_a6' / f"{stem}.jpg"
-        depth_path = self.dataset_root / entry['dataset_root'] / 'depth_maps' / f"{stem}.png"
+        image_path = self.dataset_root / entry['dataset_root'] / 'image_a6' / f"{stem}.png"
+        depth_path = self.dataset_root / entry['dataset_root'] / 'new_depth_maps' / f"{stem}.png"
 
         # 캘리브레이션 데이터는 하드코딩된 DEFAULT_CALIB_A6 사용
         calib_data = DEFAULT_CALIB_A6
