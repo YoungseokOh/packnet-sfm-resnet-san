@@ -36,6 +36,7 @@ enhanced_analysis_results/
 *.npz
 *.png
 *.pcd
+*.pkl
 # *.jpg
 # *.md
 # *.txt

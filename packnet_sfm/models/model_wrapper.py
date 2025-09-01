@@ -8,7 +8,7 @@ import numpy as np
 import torch
 import os
 from collections import OrderedDict
-from torch.utils.data import ConcatDataset, DataLoader
+from torch.utils.data import ConcatDataset, DataLoader, Subset
 
 from packnet_sfm.datasets.transforms import get_transforms
 from packnet_sfm.utils.depth import inv2depth, post_process_inv_depth, compute_depth_metrics, viz_inv_depth
@@ -21,6 +21,7 @@ from packnet_sfm.utils.reduce import all_reduce_metrics, reduce_dict, \
     create_dict, average_loss_and_metrics
 from packnet_sfm.utils.save import save_depth
 from packnet_sfm.models.model_utils import stack_batch
+from packnet_sfm.datasets.ncdb_dataset import NcdbDataset  # 필요시 import
 
 
 # 🆕 Advanced augmentation import (선택적)
@@ -201,15 +202,26 @@ class ModelWrapper(torch.nn.Module):
         """
         Prepare training dataloader.
         """
-        return setup_dataloader(self.train_dataset,
-                                self.config.datasets.train, 'train')[0]
+        dataloader = setup_dataloader(self.train_dataset,
+                                      self.config.datasets.train, 'train')[0]
+        
+        # # 🆕 디버깅용: 데이터로더를 1배치로 제한
+        # from torch.utils.data import Subset
+        # subset = Subset(dataloader.dataset, range(self.config.datasets.train.batch_size))
+        # dataloader = DataLoader(subset, batch_size=self.config.datasets.train.batch_size, 
+        #                        shuffle=False, num_workers=0)
+        
+        return dataloader
 
     def val_dataloader(self):
         """
         Prepare validation dataloader.
         """
-        return setup_dataloader(self.validation_dataset,
-                                self.config.datasets.validation, 'validation')
+        dls = setup_dataloader(self.validation_dataset,
+                               self.config.datasets.validation, 'validation')
+        # 실제 reduce용으로 사용할 dataset(Subset 포함)을 저장
+        self._val_datasets_for_reduce = [dl.dataset for dl in dls]
+        return dls
 
     def test_dataloader(self):
         """
@@ -238,6 +250,8 @@ class ModelWrapper(torch.nn.Module):
                 print("⚠️ Failed to create test dataloaders")
                 return None
             
+            # 테스트도 동일하게 reduce용 dataset 저장
+            self._test_datasets_for_reduce = [dl.dataset for dl in dataloaders]
             return dataloaders
         
         except Exception as e:
@@ -248,63 +262,41 @@ class ModelWrapper(torch.nn.Module):
         """
         Processes a training batch.
         """
-        # 🆕 Pass mask to the model if available
         model_output = self.model(batch, progress=self.progress, masks=batch.get('mask', None)) # masks 인자 추가
 
-        # Log training images at a certain interval (e.g., every 100 steps)
-        if self.loggers and batch_idx % self.config.tensorboard.log_frequency == 0: # Log frequency from config
-            # Get first image from batch - keep as tensor in (C, H, W) format
+        if self.loggers and batch_idx % self.config.tensorboard.log_frequency == 0:
             rgb_original = batch['rgb_original'][0].cpu()  # (C, H, W)
-            
-            # Visualize predicted depth
             viz_pred_inv_depth = viz_inv_depth(model_output['inv_depths'][0][0])
-            
-            # Convert to tensor and ensure float32
             if isinstance(viz_pred_inv_depth, np.ndarray):
                 viz_pred_inv_depth = torch.from_numpy(viz_pred_inv_depth).float()
-            viz_pred_inv_depth = viz_pred_inv_depth.permute(2, 0, 1)  # (H, W, C) -> (C, H, W)
+            viz_pred_inv_depth = viz_pred_inv_depth.permute(2, 0, 1)
 
-            # Apply mask if available
             mask = None
             if 'mask' in batch and batch['mask'] is not None:
-                mask = batch['mask'][0].cpu()  # Keep as tensor (C, H, W)
+                mask = batch['mask'][0].cpu()
                 if mask.dim() == 3 and mask.shape[0] == 1:
-                    mask = mask.squeeze(0)  # (1, H, W) -> (H, W)
-                elif mask.dim() == 2:
-                    pass  # Already (H, W)
-                
-                # Apply mask to visualization
+                    mask = mask.squeeze(0)
                 viz_pred_inv_depth_masked = viz_pred_inv_depth * mask.unsqueeze(0).float()
             else:
                 viz_pred_inv_depth_masked = viz_pred_inv_depth
 
-            # 🆕 Log additional visualizations for self-supervised learning
+            # use cached total batches to avoid re-creating dataloader
+            total_batches_per_epoch = getattr(self, '_train_total_batches', 1000) or 1000
+            global_step = self.current_epoch * total_batches_per_epoch + batch_idx
+
             for logger in self.loggers:
-                # Log original RGB image
-                logger.writer.add_image('train/rgb_original', rgb_original, global_step=self.current_epoch + 1)
-                # Log predicted inverse depth (masked)
-                logger.writer.add_image('train/pred_inv_depth_masked', viz_pred_inv_depth_masked, global_step=self.current_epoch + 1)
-                # Log predicted inverse depth (unmasked)
-                logger.writer.add_image('train/pred_inv_depth_unmasked', viz_pred_inv_depth, global_step=self.current_epoch + 1)
-
-                # If context images are available, log the first warped reference image and photometric error
-                if 'rgb_context_original' in batch and len(batch['rgb_context_original']) > 0:
-                    # Get the first context image
-                    ref_image_original = batch['rgb_context_original'][0][0].cpu()  # (C, H, W)
-                    logger.writer.add_image('train/ref_image_original', ref_image_original, global_step=self.current_epoch + 1)
-
-                    # To get warped reference image and photometric error, we need to re-run the photometric loss
-                    # This is not ideal for performance, but necessary for visualization if not already returned by model
-                    # A better approach would be to modify SelfSupModel to return these for logging
-                    
-                    # For now, we'll log the original and predicted depth, and if possible, the mask
-                    # The actual warped image and error map would require more significant changes to the model's forward pass
-                    # to return these intermediate values.
-                    
-                    # If mask is available, log it
-                    if mask is not None:
-                        logger.writer.add_image('train/mask', mask.unsqueeze(0).float(), global_step=self.current_epoch + 1)
-
+                logger.writer.add_image('train/rgb_original', rgb_original, global_step=global_step)
+                logger.writer.add_image('train/pred_inv_depth_masked', viz_pred_inv_depth_masked, global_step=global_step)
+                logger.writer.add_image('train/pred_inv_depth_unmasked', viz_pred_inv_depth, global_step=global_step)
+                if mask is not None:
+                    logger.writer.add_image('train/mask', mask.unsqueeze(0).float(), global_step=global_step)
+        if self.loggers:
+            for logger in self.loggers:
+                if hasattr(logger, 'writer'):
+                    total_batches_per_epoch = getattr(self, '_train_total_batches', 1000) or 1000
+                    global_step = self.current_epoch * total_batches_per_epoch + batch_idx
+                    loss_value = model_output['loss'].item() if hasattr(model_output['loss'], 'item') else float(model_output['loss'])
+                    logger.writer.add_scalar('train/loss_step', loss_value, global_step=global_step)
         return {
             'loss': model_output['loss'],
             'metrics': model_output['metrics']
@@ -316,37 +308,30 @@ class ModelWrapper(torch.nn.Module):
         """
         output = self.evaluate_depth(batch)
         if self.loggers:
-            # Get first image from batch
-            rgb_original = batch['rgb_original'][0].permute(1, 2, 0).cpu().numpy() # H, W, 3
-
-            # Visualize predicted depth
+            rgb_original = batch['rgb'][0].cpu()
             viz_pred_inv_depth = viz_inv_depth(output['inv_depth'][0])
+            if isinstance(viz_pred_inv_depth, np.ndarray):
+                viz_pred_inv_depth = torch.from_numpy(viz_pred_inv_depth).float()
+            viz_pred_inv_depth = viz_pred_inv_depth.permute(2, 0, 1)
 
-            # Apply mask if available
             mask = None
             if 'mask' in batch and batch['mask'] is not None:
-                mask = batch['mask'][0].cpu().numpy() # Get mask for the first image
-                if mask.ndim == 3:
-                    mask = np.squeeze(mask, axis=0)      # -> (H, W)
-                mask = np.expand_dims(mask, axis=-1) # -> (H, W, 1)
-                # Apply mask to visualization
-                viz_pred_inv_depth_masked = viz_pred_inv_depth * mask.astype(np.uint8)
+                mask = batch['mask'][0].cpu()
+                if mask.dim() == 3 and mask.shape[0] == 1:
+                    mask = mask.squeeze(0)
+                viz_pred_inv_depth_masked = viz_pred_inv_depth * mask.unsqueeze(0).float()
             else:
                 viz_pred_inv_depth_masked = viz_pred_inv_depth
 
-            # 🆕 Log additional visualizations for validation
-            for logger in self.loggers:
-                # Log original RGB image
-                logger.log_image('val/rgb_original', rgb_original, step=self.current_epoch + 1, batch_idx=batch_idx)
-                # Log predicted inverse depth (masked)
-                logger.log_image('val/pred_inv_depth_masked', viz_pred_inv_depth_masked, step=self.current_epoch + 1, batch_idx=batch_idx)
-                # Log predicted inverse depth (unmasked)
-                logger.log_image('val/pred_inv_depth_unmasked', viz_pred_inv_depth, step=self.current_epoch + 1, batch_idx=batch_idx)
-                
-                # If mask is available, log it
-                if mask is not None:
-                    logger.log_image('val/mask', mask * 255, step=self.current_epoch + 1, batch_idx=batch_idx, is_mask=True)
+            total_batches_per_epoch = getattr(self, '_val_total_batches', 1000) or 1000
+            global_step = self.current_epoch * total_batches_per_epoch + batch_idx
 
+            for logger in self.loggers:
+                logger.writer.add_image('val/rgb_original', rgb_original, global_step=global_step)
+                logger.writer.add_image('val/pred_inv_depth_masked', viz_pred_inv_depth_masked, global_step=global_step)
+                logger.writer.add_image('val/pred_inv_depth_unmasked', viz_pred_inv_depth, global_step=global_step)
+                if mask is not None:
+                    logger.writer.add_image('val/mask', mask.unsqueeze(0).float(), global_step=global_step)
         return {
             'idx': batch['idx'],
             **output['metrics'],
@@ -401,6 +386,20 @@ class ModelWrapper(torch.nn.Module):
         loss_and_metrics = average_loss_and_metrics(output_batch, 'avg_train')
         loss_and_metrics = reduce_dict(loss_and_metrics, to_item=True)
 
+        # 🆕 Log training loss to TensorBoard
+        if self.loggers:
+            for logger in self.loggers:
+                if hasattr(logger, 'writer'):  # TensorBoard logger
+                    # Log training loss
+                    if 'loss' in loss_and_metrics:
+                        logger.writer.add_scalar('train/loss', loss_and_metrics['loss'], global_step=self.current_epoch + 1)
+                    
+                    # Log learning rate if available
+                    if hasattr(self, 'optimizer') and self.optimizer is not None:
+                        for i, param_group in enumerate(self.optimizer.param_groups):
+                            lr = param_group['lr']
+                            logger.writer.add_scalar(f'train/lr_{param_group.get("name", f"group_{i}")}', lr, global_step=self.current_epoch + 1)
+
         # Log to wandb
         if self.loggers:
             prefixed_loss_and_metrics = {f'train/{key}': val for key, val in loss_and_metrics.items()}
@@ -417,15 +416,42 @@ class ModelWrapper(torch.nn.Module):
         """
         Finishes a validation epoch.
         """
+        # 실제 사용한(제한된) 데이터셋으로 reduce
+        datasets_for_reduce = getattr(self, '_val_datasets_for_reduce', self.validation_dataset)
 
         # Reduce depth metrics
         metrics_data = all_reduce_metrics(
-            output_data_batch, self.validation_dataset, self.metrics_name)
+            output_data_batch, datasets_for_reduce, self.metrics_name)
 
         # Create depth dictionary
         metrics_dict = create_dict(
             metrics_data, self.metrics_keys, self.metrics_modes,
             self.config.datasets.validation)
+
+        # 🆕 Calculate validation loss if available
+        val_loss = None
+        if output_data_batch and len(output_data_batch) > 0 and len(output_data_batch[0]) > 0:
+            # Extract loss from validation outputs
+            losses = []
+            for batch_output in output_data_batch:
+                for output in batch_output:
+                    if 'loss' in output:
+                        losses.append(output['loss'])
+            if losses:
+                val_loss = sum(losses) / len(losses)
+
+        # 🆕 Log validation loss and metrics to TensorBoard
+        if self.loggers:
+            for logger in self.loggers:
+                if hasattr(logger, 'writer'):  # TensorBoard logger
+                    # Log validation loss
+                    if val_loss is not None:
+                        logger.writer.add_scalar('val/loss', val_loss, global_step=self.current_epoch + 1)
+                    
+                    # Log validation depth metrics
+                    for key, val in metrics_dict.items():
+                        if isinstance(val, (int, float)):
+                            logger.writer.add_scalar(f'val/{key}', val, global_step=self.current_epoch + 1)
 
         # Print stuff
         self.print_metrics(metrics_data, self.config.datasets.validation)
@@ -440,13 +466,9 @@ class ModelWrapper(torch.nn.Module):
                 if key.startswith('depth'):
                     log_metrics[f'val/{key}'] = val
             
-            # Also add validation loss if available (assuming it's part of metrics_dict or can be derived)
-            # This part might need adjustment based on how validation loss is calculated and stored.
-            # For now, assuming 'loss' might be a key in metrics_dict or can be added.
-            if 'loss' in metrics_dict:
-                log_metrics[f'val/loss'] = metrics_dict['loss']
-            elif 'avg_val_loss' in metrics_dict: # Example if a specific validation loss key exists
-                log_metrics[f'val/loss'] = metrics_dict['avg_val_loss']
+            # Add validation loss if available
+            if val_loss is not None:
+                log_metrics['val/loss'] = val_loss
 
             for logger in self.loggers:
                 logger.log_metrics(log_metrics, step=self.current_epoch + 1)
@@ -459,10 +481,12 @@ class ModelWrapper(torch.nn.Module):
         """
         Finishes a test epoch.
         """
+        # 실제 사용한(제한된) 데이터셋으로 reduce
+        datasets_for_reduce = getattr(self, '_test_datasets_for_reduce', self.test_dataset)
 
         # Reduce depth metrics
         metrics_data = all_reduce_metrics(
-            output_data_batch, self.test_dataset, self.metrics_name)
+            output_data_batch, datasets_for_reduce, self.metrics_name)
 
         # Create depth dictionary
         metrics_dict = create_dict(
@@ -497,31 +521,121 @@ class ModelWrapper(torch.nn.Module):
         assert self.pose_net is not None, 'Pose network not defined'
         return self.pose_net(*args, **kwargs)
 
+    def _compute_depth_metrics_fallback(self, gt, pred):
+        """
+        Return metrics as a Tensor [abs_rel, sqr_rel, rmse, rmse_log, a1, a2, a3].
+        Inputs: gt/pred (B,1,H,W) float tensors on same device.
+        """
+        eps = 1e-6
+        params = getattr(self.config.model, 'params', {})
+        # handle yacs CfgNode with keys min_depth/max_depth
+        try:
+            min_d = float(params.get('min_depth', 0.1))
+            max_d = float(params.get('max_depth', 80.0))
+        except Exception:
+            min_d, max_d = 0.1, 80.0
+
+        gt = gt.clamp(min=min_d, max=max_d)
+        pred = pred.clamp(min=min_d, max=max_d)
+
+        mask = torch.isfinite(gt) & torch.isfinite(pred) & (gt > min_d) & (gt < max_d)
+        if mask.float().sum() == 0:
+            return torch.zeros(7, device=gt.device, dtype=torch.float32)
+
+        gt_m = gt[mask]
+        pred_m = pred[mask]
+
+        abs_rel = (torch.abs(gt_m - pred_m) / (gt_m + eps)).mean()
+        sqr_rel = (((gt_m - pred_m) ** 2) / (gt_m + eps)).mean()
+        rmse = torch.sqrt(((gt_m - pred_m) ** 2).mean())
+        rmse_log = torch.sqrt(((torch.log(gt_m + eps) - torch.log(pred_m + eps)) ** 2).mean())
+
+        thresh = torch.max(gt_m / (pred_m + eps), pred_m / (gt_m + eps))
+        a1 = (thresh < 1.25).float().mean()
+        a2 = (thresh < 1.25 ** 2).float().mean()
+        a3 = (thresh < 1.25 ** 3).float().mean()
+
+        return torch.stack([abs_rel, sqr_rel, rmse, rmse_log, a1, a2, a3]).to(gt.dtype)
+
     def evaluate_depth(self, batch):
         """
         Evaluate batch to produce depth metrics.
         """
-        # Get predicted depth
-        inv_depths = self.model(batch)['inv_depths']
-        depth = inv2depth(inv_depths[0])
-        # Post-process predicted depth
+        # Get predicted inv-depths
+        inv_depths = self.model(batch)['inv_depths']         # list, first scale: (B,1,H,W)
+        inv0 = inv_depths[0]
+        depth = inv2depth(inv0)                              # (B,1,H,W)
+
+        # Always do flip post-process for validation/test
+        # 1) flip input
         batch['rgb'] = flip_lr(batch['rgb'])
-        if 'input_depth' in batch:
-            batch['input_depth'] = flip_lr(batch['input_depth'])
+        # 2) predict on flipped input
         inv_depths_flipped = self.model(batch)['inv_depths']
-        inv_depth_pp = post_process_inv_depth(
-            inv_depths[0], inv_depths_flipped[0], method='mean')
+        # 3) flip prediction back to original coordinates
+        inv0_flipped_back = flip_lr(inv_depths_flipped[0])
+        # 4) post-process combine
+        inv_depth_pp = post_process_inv_depth(inv0, inv0_flipped_back, method='mean')
         depth_pp = inv2depth(inv_depth_pp)
+        # 5) restore input
         batch['rgb'] = flip_lr(batch['rgb'])
-        # Calculate predicted metrics
+
+        # Normalize to (B,1,H,W) on correct device
+        device = inv0.device
+        def _to_b1hw(x):
+            if x is None:
+                return None
+            if isinstance(x, np.ndarray):
+                x = torch.from_numpy(x)
+            if not isinstance(x, torch.Tensor):
+                return None
+            x = x.to(device=device, dtype=torch.float32)
+            if x.dim() == 0:
+                return x.view(1, 1, 1, 1)
+            if x.dim() == 2:
+                return x.unsqueeze(0).unsqueeze(0)
+            if x.dim() == 3:
+                if x.size(0) in (1, 3):   # assume (C,H,W)
+                    x = x.unsqueeze(0)
+                    return x[:, :1, ...]
+                else:                     # (B,H,W)
+                    return x.unsqueeze(1)
+            if x.dim() == 4:
+                if x.size(1) != 1:
+                    return x[:, :1, ...]
+                return x
+            return None
+
+        depth_pred    = _to_b1hw(depth)
+        depth_pred_pp = _to_b1hw(depth_pp)
+        depth_gt      = _to_b1hw(batch.get('depth', None))
+
+        # Compute metrics (tensor of 7 values each)
         metrics = OrderedDict()
-        if 'depth' in batch:
-            for mode in self.metrics_modes:
-                metrics[self.metrics_name + mode] = compute_depth_metrics(
-                    self.config.model.params, gt=batch['depth'],
-                    pred=depth_pp if 'pp' in mode else depth,
-                    use_gt_scale='gt' in mode)
-        # Return metrics and extra information
+        if depth_gt is not None and depth_pred is not None:
+            try:
+                m_main = compute_depth_metrics(self.config.model.params, gt=depth_gt, pred=depth_pred, use_gt_scale=False)
+            except Exception:
+                m_main = self._compute_depth_metrics_fallback(depth_gt, depth_pred)
+            metrics['depth'] = m_main
+
+            try:
+                m_pp = compute_depth_metrics(self.config.model.params, gt=depth_gt, pred=depth_pred_pp, use_gt_scale=False)
+            except Exception:
+                m_pp = self._compute_depth_metrics_fallback(depth_gt, depth_pred_pp)
+            metrics['depth_pp'] = m_pp
+
+            try:
+                m_gt = compute_depth_metrics(self.config.model.params, gt=depth_gt, pred=depth_pred, use_gt_scale=True)
+            except Exception:
+                m_gt = self._compute_depth_metrics_fallback(depth_gt, depth_pred)
+            metrics['depth_gt'] = m_gt
+
+            try:
+                m_pp_gt = compute_depth_metrics(self.config.model.params, gt=depth_gt, pred=depth_pred_pp, use_gt_scale=True)
+            except Exception:
+                m_pp_gt = self._compute_depth_metrics_fallback(depth_gt, depth_pred_pp)
+            metrics['depth_pp_gt'] = m_pp_gt
+
         return {
             'metrics': metrics,
             'inv_depth': inv_depth_pp
@@ -812,45 +926,65 @@ def setup_dataloader(datasets, config, mode):
     """
     Create a dataloader class
     🆕 Enhanced to support advanced augmentation collate functions
-
-    Parameters
-    ----------
-    datasets : list of Dataset
-        List of datasets from which to create dataloaders
-    config : CfgNode
-        Model configuration (cf. configs/default_config.py)
-    mode : str {'train', 'validation', 'test'}
-        Mode from which we want the dataloader
-
-    Returns
-    -------
-    dataloaders : list of Dataloader
-        List of created dataloaders for each input dataset
     """
     
-    # 🆕 Advanced augmentation collate function (선택적)
-    collate_fn = None
+    # Advanced augmentation collate function (quiet)
+    base_collate_fn = None
     if (mode == 'train' and 
         hasattr(config, 'augmentation') and 
         ADVANCED_COLLATE_AVAILABLE):
-        collate_fn = create_kitti_advanced_collate_fn(config.augmentation)
-        print("🎨 Using advanced augmentation collate function")
-    
-    # 🔧 Sampler와 shuffle 충돌 해결
+        base_collate_fn = create_kitti_advanced_collate_fn(config.augmentation)
+
+    # Helper: flatten ConcatDataset / Subset children
+    def _iter_children(ds):
+        if isinstance(ds, ConcatDataset):
+            for sub in ds.datasets:
+                yield from _iter_children(sub)
+        elif isinstance(ds, Subset):
+            yield from _iter_children(ds.dataset)
+        else:
+            yield ds
+
+    # ✅ 고정 숫자로 로더 샘플 제한 (필요시 여기 숫자만 바꾸세요)
+    FORCE_LIMITS = {
+        'train': 0,       # 학습에서 처음 128개만 사용
+        'validation': 0,   # 검증에서 처음 64개만 사용
+        'test': 0,         # 테스트에서 처음 64개만 사용
+    }
+
+    def _get_debug_limit():
+        return FORCE_LIMITS.get(mode, 0)
+
+    debug_limit = _get_debug_limit()
+
     dataloaders = []
     for dataset in datasets:
-        # Sampler 설정
+        if debug_limit > 0 and len(dataset) > debug_limit:
+            dataset = Subset(dataset, list(range(debug_limit)))
+            print0(pcolor(f'Using first {debug_limit} samples for {mode}', 'yellow'))
+
         sampler = get_datasampler(dataset, mode)
-        
-        # Sampler가 있으면 shuffle=False, 없으면 shuffle=(mode=='train')
         shuffle_enabled = (mode == 'train') and (sampler is None)
-        
+
+        # Pick collate_fn per dataset (inspect children if ConcatDataset/Subset wraps it)
+        collate_fn = base_collate_fn
+        for child in _iter_children(dataset):
+            if hasattr(child, 'custom_collate_fn') and callable(child.custom_collate_fn):
+                collate_fn = child.custom_collate_fn
+                break
+            if type(child).__name__ == 'NcdbDataset':
+                from packnet_sfm.datasets.ncdb_dataset import NcdbDataset
+                collate_fn = NcdbDataset.custom_collate_fn
+                break
+
+        num_workers = config.num_workers if debug_limit == 0 else 0
+
         dataloader = DataLoader(
             dataset,
-            batch_size=config.batch_size, 
-            shuffle=shuffle_enabled,  # 🔧 수정된 부분
+            batch_size=config.batch_size,
+            shuffle=shuffle_enabled,
             pin_memory=False, 
-            num_workers=config.num_workers,
+            num_workers=num_workers,
             worker_init_fn=worker_init_fn,
             sampler=sampler,
             collate_fn=collate_fn

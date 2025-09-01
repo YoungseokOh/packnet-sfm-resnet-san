@@ -207,7 +207,23 @@ def save_depth_map(path: Path, depth_map: np.ndarray):
     image = Image.fromarray(depth_map_uint16, mode='I;16')
     image.save(path)
 
-def process_folder(projector: LidarCameraProjector, parent_folder: Path, cam_name: str, output_dir: Path):
+def process_folder(projector: LidarCameraProjector, parent_folder: Path, cam_name: str, output_dir: Path, pcd_folder: str = "pcd"):
+    """
+    Process a folder to create depth maps.
+    
+    Parameters
+    ----------
+    projector : LidarCameraProjector
+        The projector instance for creating depth maps
+    parent_folder : Path
+        Parent folder containing the 'synced_data' directory
+    cam_name : str
+        Camera name to project to
+    output_dir : Path
+        Directory to save the generated depth maps
+    pcd_folder : str
+        PCD folder name within synced_data (default: "pcd")
+    """
     synced_data_dir = parent_folder / "synced_data"
     mapping_file = synced_data_dir / "mapping_data.json"
     
@@ -228,11 +244,13 @@ def process_folder(projector: LidarCameraProjector, parent_folder: Path, cam_nam
             print(f"Warning: Mismatch in number of image and PCD entries in mapping_data.json. Using minimum count.", file=sys.stderr)
         
         num_samples = min(len(image_rel_paths), len(pcd_rel_paths))
-        print(f"Processing {num_samples} files. Saving depth maps to {output_dir}")
+        print(f"Processing {num_samples} files from '{pcd_folder}' folder. Saving depth maps to {output_dir}")
 
         for i in tqdm(range(num_samples)):
             image_path = synced_data_dir / image_rel_paths[i]
-            pcd_path = synced_data_dir / pcd_rel_paths[i]
+            # 🆕 PCD 폴더를 명시적으로 지정
+            pcd_filename = Path(pcd_rel_paths[i]).name  # 파일명만 추출
+            pcd_path = synced_data_dir / pcd_folder / pcd_filename
             
             if not image_path.exists():
                 # Try with .jpg extension as a fallback
@@ -242,10 +260,10 @@ def process_folder(projector: LidarCameraProjector, parent_folder: Path, cam_nam
                     continue
             
             if not pcd_path.exists():
-                 # Try with .bin extension as a fallback
+                # Try with .bin extension as a fallback
                 pcd_path = pcd_path.with_suffix('.bin')
                 if not pcd_path.exists():
-                    print(f"DEBUG: PCD file not found: {pcd_path.with_suffix('.pcd')} or {pcd_path}", file=sys.stderr)
+                    print(f"DEBUG: PCD file not found in '{pcd_folder}' folder: {pcd_path.with_suffix('.pcd')} or {pcd_path}", file=sys.stderr)
                     continue
 
             try:
@@ -261,9 +279,10 @@ def process_folder(projector: LidarCameraProjector, parent_folder: Path, cam_nam
             except Exception as e:
                 print(f"Error processing {image_path.name}: {e}", file=sys.stderr)
                 traceback.print_exc()
+    
     elif isinstance(mapping_data, list): # Keep original list handling for backward compatibility if needed
         print(f"Warning: mapping_data.json is a list of objects. Processing with 'new_filename' assumption.", file=sys.stderr)
-        print(f"Processing {len(mapping_data)} files. Saving depth maps to {output_dir}")
+        print(f"Processing {len(mapping_data)} files from '{pcd_folder}' folder. Saving depth maps to {output_dir}")
 
         for item in tqdm(mapping_data):
             new_filename = item.get("new_filename")
@@ -271,7 +290,8 @@ def process_folder(projector: LidarCameraProjector, parent_folder: Path, cam_nam
                 continue
 
             image_path = synced_data_dir / "image_a6" / f"{new_filename}.png"
-            pcd_path = synced_data_dir / "pcd" / f"{new_filename}.pcd"
+            # 🆕 PCD 폴더를 명시적으로 지정
+            pcd_path = synced_data_dir / pcd_folder / f"{new_filename}.pcd"
             
             if not image_path.exists():
                 # Try with .jpg extension as a fallback
@@ -281,10 +301,10 @@ def process_folder(projector: LidarCameraProjector, parent_folder: Path, cam_nam
                     continue
             
             if not pcd_path.exists():
-                 # Try with .bin extension as a fallback
+                # Try with .bin extension as a fallback
                 pcd_path = pcd_path.with_suffix('.bin')
                 if not pcd_path.exists():
-                    print(f"DEBUG: PCD file not found: {pcd_path.with_suffix('.pcd')} or {pcd_path}", file=sys.stderr)
+                    print(f"DEBUG: PCD file not found in '{pcd_folder}' folder: {pcd_path.with_suffix('.pcd')} or {pcd_path}", file=sys.stderr)
                     continue
 
             try:
@@ -332,6 +352,8 @@ def main():
                         help="Directory to save the generated depth maps.")
     parser.add_argument("--cam", type=str, default="a6",
                         help="Camera to project to (must be 'a6' with this configuration).")
+    parser.add_argument("--pcd-folder", type=str, default="pcd",
+                        help="PCD folder name within synced_data (default: 'pcd'). Use 'new_pcd' for new_pcd folder.")
     parser.add_argument("--calib_json", type=str, default=None,
                         help="Path to a JSON file with calibration data. Uses default if not provided.")
     parser.add_argument("--lidar_to_world", type=str, default=None,
@@ -362,7 +384,8 @@ def main():
             projector=projector,
             parent_folder=parent_folder,
             cam_name=args.cam,
-            output_dir=output_dir
+            output_dir=output_dir,
+            pcd_folder=args.pcd_folder  # 🆕 PCD 폴더 파라미터 전달
         )
         print("Depth map generation complete.")
 

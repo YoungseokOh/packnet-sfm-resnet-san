@@ -9,6 +9,7 @@ from packnet_sfm.utils.logging import print_config, pcolor
 from packnet_sfm.utils.logging import AvgMeter
 from tqdm import tqdm
 from packnet_sfm.utils.config import s3_url
+from packnet_sfm.datasets.ncdb_dataset import NcdbDataset  # 필요시 import
 
 
 class HorovodTrainer(BaseTrainer):
@@ -80,6 +81,16 @@ class HorovodTrainer(BaseTrainer):
         # Get train and val dataloaders
         train_dataloader = module.train_dataloader()
         val_dataloaders = module.val_dataloader()
+
+        # cache total batches to avoid re-creating loaders inside steps
+        try:
+            module._train_total_batches = len(train_dataloader)
+        except Exception:
+            module._train_total_batches = None
+        try:
+            module._val_total_batches = sum(len(dl) for dl in val_dataloaders) if val_dataloaders else None
+        except Exception:
+            module._val_total_batches = None
 
         # Setup evaluation dataloaders
         self.eval_dataloaders = None
@@ -207,17 +218,6 @@ class HorovodTrainer(BaseTrainer):
             return {}
 
     def train_with_eval(self, dataloader, module, optimizer):
-        """IPC를 활용한 공유 메모리 최적화 훈련 메서드"""
-        
-        # 🆕 IPC 공유 메모리 전략 설정
-        import torch.multiprocessing as mp
-        try:
-            mp.set_sharing_strategy('file_system')
-            print("✅ IPC sharing strategy set to file_system")
-        except RuntimeError:
-            # 이미 설정된 경우 무시
-            pass
-        
         module.train()
 
         if hasattr(dataloader.sampler, "set_epoch"):
@@ -323,25 +323,37 @@ class HorovodTrainer(BaseTrainer):
     def validate(self, dataloaders, module):
         # Set module to eval
         module.eval()
-        # Start validation loop
+
         all_outputs = []
-        # For all validation datasets
         for n, dataloader in enumerate(dataloaders):
-            # Prepare progress bar for that dataset
-            progress_bar = self.val_progress_bar(
-                dataloader, module.config.datasets.validation, n)
+            progress_bar = self.val_progress_bar(dataloader, module.config.datasets.validation, n)
             outputs = []
-            # For all batches
+
             for i, batch in progress_bar:
-                # Send batch to GPU and take a validation step
                 batch = sample_to_cuda(batch)
                 output = module.validation_step(batch, i, n)
-                # Append output to list of outputs
                 outputs.append(output)
-            # Append dataset outputs to list of all outputs
+
             all_outputs.append(outputs)
-        # Return all outputs for epoch end
         return module.validation_epoch_end(all_outputs)
+
+    @torch.no_grad()
+    def evaluate(self, dataloaders, module):
+        # Set module to eval
+        module.eval()
+
+        all_outputs = []
+        for n, dataloader in enumerate(dataloaders):
+            progress_bar = self.val_progress_bar(dataloader, module.config.datasets.test, n)
+            outputs = []
+
+            for i, batch in progress_bar:
+                batch = sample_to_cuda(batch, self.dtype)
+                output = module.test_step(batch, i, n)
+                outputs.append(output)
+
+            all_outputs.append(outputs)
+        return module.test_epoch_end(all_outputs)
 
     def test(self, module):
         # Send module to GPU
@@ -350,30 +362,6 @@ class HorovodTrainer(BaseTrainer):
         test_dataloaders = module.test_dataloader()
         # Run evaluation
         self.evaluate(test_dataloaders, module)
-
-    @torch.no_grad()
-    def evaluate(self, dataloaders, module):
-        # Set module to eval
-        module.eval()
-        # Start evaluation loop
-        all_outputs = []
-        # For all test datasets
-        for n, dataloader in enumerate(dataloaders):
-            # Prepare progress bar for that dataset
-            progress_bar = self.val_progress_bar(
-                dataloader, module.config.datasets.test, n)
-            outputs = []
-            # For all batches
-            for i, batch in progress_bar:
-                # Send batch to GPU and take a test step
-                batch = sample_to_cuda(batch, self.dtype)
-                output = module.test_step(batch, i, n)
-                # Append output to list of outputs
-                outputs.append(output)
-            # Append dataset outputs to list of all outputs
-            all_outputs.append(outputs)
-        # Return all outputs for epoch end
-        return module.test_epoch_end(all_outputs)
 
     def _save_eval_results(self, epoch: int, results: dict):
         """중간 평가 후 checkpoint 폴더에 JSON 결과 저장"""

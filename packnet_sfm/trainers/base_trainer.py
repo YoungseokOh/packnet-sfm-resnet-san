@@ -3,19 +3,40 @@
 import torch
 from tqdm import tqdm
 from packnet_sfm.utils.logging import prepare_dataset_prefix
-
+import numpy as np  # add if not present
 
 def sample_to_cuda(data, dtype=None):
-    if isinstance(data, str):
+    """
+    Recursively move tensors in a nested structure to CUDA.
+    Leave non-tensors (e.g., Camera objects, strings) unchanged.
+    """
+    # Tensor -> GPU (with optional dtype cast for float tensors)
+    if isinstance(data, torch.Tensor):
+        if dtype is not None and torch.is_floating_point(data):
+            data = data.to(dtype=dtype)
+        return data.cuda(non_blocking=True)
+
+    # NumPy -> Tensor -> GPU
+    if isinstance(data, np.ndarray):
+        tensor = torch.from_numpy(data)
+        if dtype is not None and torch.is_floating_point(tensor):
+            tensor = tensor.to(dtype=dtype)
+        return tensor.cuda(non_blocking=True)
+
+    # Mapping
+    if isinstance(data, dict):
+        return {k: sample_to_cuda(v, dtype) for k, v in data.items()}
+
+    # Sequence
+    if isinstance(data, (list, tuple)):
+        return type(data)(sample_to_cuda(v, dtype) for v in data)
+
+    # Primitives stay on CPU
+    if isinstance(data, (int, float, bool)):
         return data
-    elif isinstance(data, dict):
-        return {key: sample_to_cuda(data[key], dtype) for key in data.keys()}
-    elif isinstance(data, list):
-        return [sample_to_cuda(val, dtype) for val in data]
-    else:
-        # only convert floats (e.g., to half), otherwise preserve (e.g, ints)
-        dtype = dtype if torch.is_floating_point(data) else None
-        return data.to('cuda', dtype=dtype)
+
+    # Anything else (e.g., FisheyeCamera) untouched
+    return data
 
 
 class BaseTrainer:

@@ -1,15 +1,15 @@
 model:
     name: 'SemiSupCompletionModel'
     loss:
-        supervised_method: 'sparse-ssi-silog'
+        supervised_method: 'sparse-silog'
         supervised_num_scales: 1
         supervised_loss_weight: 1.0
     optimizer:
         name: 'Adam'
         depth:
-            lr: 0.0001
+            lr: 0.0002
         pose:
-            lr: 0.0001
+            lr: 0.0002
     scheduler:
         name: 'StepLR'
         step_size: 30
@@ -30,7 +30,7 @@ model:
 
 datasets:
     train:
-        batch_size: 2 # Reduced for larger image size
+        batch_size: 4 # Reduced for larger image size
         dataset: ['ncdb']
         path: ['/workspace/data/ncdb-cls']
         split: ['splits/combined_train.json']
@@ -59,11 +59,11 @@ arch:
     eval_subset_size: 100
 
 checkpoint:
-    filepath: 'checkpoints/resnetsan01_new_depth_map_test/'
+    filepath: 'checkpoints/resnetsan01_new_depth_map_test_full_sparse_silog/'
     save_top_k: -1
 
 save:
-    folder: 'outputs/resnetsan01_new_depth_map_test/'
+    folder: 'outputs/resnetsan01_new_depth_map_test_full_sparse_silog/'
 
 tensorboard:
     dry_run: false
