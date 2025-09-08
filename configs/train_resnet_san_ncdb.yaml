@@ -59,11 +59,11 @@ arch:
     eval_subset_size: 100
 
 checkpoint:
-    filepath: 'checkpoints/resnetsan01_new_depth_map_test_full_sparse_silog/'
+    filepath: 'checkpoints/resnetsan01_newest_test/'
     save_top_k: -1
 
 save:
-    folder: 'outputs/resnetsan01_new_depth_map_test_full_sparse_silog/'
+    folder: 'outputs/resnetsan01_newest_test/'
 
 tensorboard:
     dry_run: false

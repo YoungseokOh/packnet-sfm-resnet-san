@@ -22,7 +22,9 @@ class VADASLookupTableGenerator:
     
     def __init__(self, image_size: Tuple[int, int], 
                  calib_data: Optional[Dict] = None,
-                 use_cache: bool = True):
+                 use_cache: bool = True,
+                 use_roots: bool = True,
+                 verbose: bool = False):
         """
         Parameters
         ----------
@@ -32,6 +34,10 @@ class VADASLookupTableGenerator:
             VADAS 캘리브레이션 데이터 (기본값 사용 시 None)
         use_cache : bool
             캐싱 사용 여부
+        use_roots : bool
+            다항식 역산에 numpy.roots 사용 여부 (기본 True, 실패 시 뉴턴법 폴백)
+        verbose : bool
+            디버그 로깅 여부
         """
         # 캘리브레이션 데이터 설정
         if calib_data is None:
@@ -44,6 +50,8 @@ class VADASLookupTableGenerator:
         self.uy = calib_data['uy']
         self.image_size = image_size
         self.use_cache = use_cache
+        self.use_roots = use_roots
+        self.verbose = verbose
         
         # 캐시 키 생성
         self.cache_key = self._generate_cache_key()
@@ -70,109 +78,85 @@ class VADASLookupTableGenerator:
             return [0.0]
         return [i * coeffs[i] for i in range(1, n)]
     
-    def _inverse_polynomial_newton(self, r_d: float, max_iter: int = 20, tol: float = 1e-8) -> float:
-        """Newton-Raphson 방법을 사용한 7차 다항식 역 계산 (해가 하나만 존재한다는 가정으로 단순화)"""
-        if r_d < 1e-8:
-            return 0.0
-        
-        # 초기 추정값: r_d로부터 합리적인 theta 추정
-        theta = np.arctan(r_d)
-        
-        # 도함수 계수 미리 계산
-        deriv_coeffs = self._poly_derivative(self.k)
-        
-        print(f"🔍 Solving for r_d = {r_d:.6f}, initial theta = {np.degrees(theta):.2f}°")
-        
-        for i in range(max_iter):
-            # Forward polynomial 계산
-            xd = theta * self.s
-            poly_val = self._poly_eval(self.k, xd) / self.div
-            
-            # 목표값과의 차이
-            residual = poly_val - r_d
-            
-            print(f"   Iteration {i+1}: theta = {np.degrees(theta):.4f}°, poly_val = {poly_val:.6f}, residual = {residual:.8f}")
-            
-            # 수렴 체크
-            if abs(residual) < tol:
-                print(f"   ✅ Converged! Final theta = {np.degrees(theta):.4f}°")
-                return theta
-            
-            # Derivative 계산
-            deriv_val = self._poly_eval(deriv_coeffs, xd) * self.s / self.div
-            
-            # Newton step
-            if abs(deriv_val) > tol:
-                delta_theta = residual / deriv_val
-                theta = theta - 0.5 * delta_theta  # 학습률 0.5로 안정화
-                print(f"      Delta theta = {np.degrees(delta_theta):.6f}°, new theta = {np.degrees(theta):.4f}°")
-            else:
-                print(f"   ⚠️ Derivative too small, stopping")
-                break
-        
-        print(f"   ❌ Not converged after {max_iter} iterations, final theta = {np.degrees(theta):.4f}°")
-        return theta
+    def _inverse_polynomial_roots(self, r_d: float) -> float:
+        """7차 다항식 P(xd) - r_d*div = 0 을 xd에 대해 np.roots로 풀고 theta=xd/s 반환"""
+        # P(xd) = sum k_i * xd^i
+        coeffs = list(self.k)  # a0..aN
+        coeffs[0] = coeffs[0] - (r_d * self.div)  # 상수항 보정
+        # np.roots는 최고차부터 기대하므로 뒤집기
+        poly = list(reversed(coeffs))
+        roots = np.roots(poly)
+        real_roots = np.real(roots[np.isreal(roots)])
+        # 물리적으로 의미 있는 해: xd >= 0 중 최소값
+        candidates = real_roots[real_roots >= 0.0]
+        if candidates.size == 0:
+            return np.nan
+        xd = float(np.min(candidates))
+        theta = xd / self.s
+        if theta > np.deg2rad(95):
+            return np.nan
+        return float(theta)
+
     
+
     def _generate_pixel_wise_lut(self):
         """픽셀별 theta와 angle_maps 생성 (ref_generate_luts 방식)"""
         print("🔧 Generating pixel-wise LUTs (ref_generate_luts style)...")
         print(f"   Image size: {self.image_size}")
         print(f"   VADAS params: k={self.k[:3]}..., s={self.s}, div={self.div}")
-        
-        # 이미지 좌표 생성 (ref_generate_luts 방식)
-        x = np.linspace(0, self.image_size[1] - 1, self.image_size[1])  # width
-        y = np.linspace(0, self.image_size[0] - 1, self.image_size[0])  # height
+
+        H, W = self.image_size
+        # 이미지 좌표 생성
+        x = np.linspace(0, W - 1, W)  # width
+        y = np.linspace(0, H - 1, H)  # height
         mesh_x, mesh_y = np.meshgrid(x, y)
         mesh_x, mesh_y = mesh_x.reshape(-1, 1), mesh_y.reshape(-1, 1)
-        
-        # 카메라 좌표계로 변환 (VADAS 모델에 맞게)
-        x_cam = (mesh_x - self.ux) / self.s
-        y_cam = (mesh_y - self.uy) / self.div
-        
-        # 왜곡 반경 계산
-        r = np.sqrt(x_cam * x_cam + y_cam * y_cam)
-        
-        # theta LUT (방향각)
-        self.theta_lut = np.arctan2(y_cam, x_cam).astype(np.float32)
-        
-        # angle LUT (7차 다항식의 역으로 구한 각도)
+
+        # ref_generate_luts 및 projector와 일치하도록 주점에 이미지 중심 보정 적용
+        u0 = self.ux + (W / 2.0)
+        v0 = self.uy + (H / 2.0)
+
+        # 픽셀 단위 오프셋 및 반경
+        dx = (mesh_x - u0)
+        dy = (mesh_y - v0)
+        r = np.sqrt(dx * dx + dy * dy)
+
+        # theta LUT (방위각)
+        self.theta_lut = np.arctan2(dy, dx).astype(np.float32)
+
+        # angle LUT (입사각)
         self.angle_lut = np.zeros_like(r, dtype=np.float32)
-        
-        print(f"   Processing {len(r)} pixels...")
-        
-        # 테스트를 위해 일부 픽셀만 처리 (전체 처리 시 너무 많은 출력)
-        test_pixels = [0, 1000, 5000, 10000, 20000, len(r)-1]  # 시작, 중간, 끝 픽셀들
-        
+
+        total = len(r)
+        print(f"   Processing {total} pixels...")
+
+        # 샘플 디버그 인덱스
+        sample_idx = {0, min(5000, total-1), total-1}
+
         for i, _r in enumerate(r):
-            if _r[0] < 1e-8:  # 중심부 픽셀
+            r_d = float(_r[0])
+            if r_d < 1e-8:
                 self.angle_lut[i] = 0.0
             else:
                 try:
-                    # Newton-Raphson으로 7차 다항식 역 계산
-                    theta = self._inverse_polynomial_newton(_r[0])
-                    self.angle_lut[i] = theta
-                    
-                    # 테스트 픽셀에 대해서만 상세 출력
-                    if i in test_pixels:
-                        print(f"\n📍 Test Pixel {i}:")
-                        print(f"   r_d = {_r[0]:.6f}")
-                        print(f"   Final theta = {np.degrees(theta):.4f}°")
-                        print(f"   Verification: forward calc = {self._poly_eval(self.k, theta * self.s) / self.div:.6f}")
-                        
+                    theta_inc = self._inverse_polynomial_roots(r_d)
+                    self.angle_lut[i] = theta_inc
+                    if self.verbose and i in sample_idx:
+                        fwd = self._poly_eval(self.k, theta_inc * self.s) / self.div
+                        print(f"   [#{i}] r_d={r_d:.4f} -> θ={np.degrees(theta_inc):.3f}°, fwd={fwd:.4f}")
                 except Exception as e:
-                    print(f"Warning: Failed to compute inverse for pixel {i}, r={_r[0]}: {e}")
-                    self.angle_lut[i] = 0.0
-            
-            # 진행 상황 출력 (1000픽셀마다)
-            if i % 1000 == 0 and i > 0:
-                print(f"   Processed {i}/{len(r)} pixels...")
-        
-        print(f"✅ Pixel-wise LUTs generated: {self.image_size[0]}x{self.image_size[1]} pixels")
-        print(f"   Theta range: {np.degrees(self.theta_lut.min()):.2f}° ~ {np.degrees(self.theta_lut.max()):.2f}°")
-        print(f"   Angle range: {np.degrees(self.angle_lut.min()):.2f}° ~ {np.degrees(self.angle_lut.max()):.2f}°")
-        
-        # 최종 통계 출력
-        valid_angles = self.angle_lut[self.angle_lut != 0.0]
+                    if self.verbose:
+                        print(f"Warning: inverse failed at {i}, r_d={r_d}: {e}")
+                    self.angle_lut[i] = np.nan
+
+            if i % 50000 == 0 and i > 0:
+                print(f"   Processed {i}/{total} pixels...")
+
+        print(f"✅ Pixel-wise LUTs generated: {H}x{W} pixels")
+        print(f"   Theta range: {np.degrees(np.nanmin(self.theta_lut)):.2f}° ~ {np.degrees(np.nanmax(self.theta_lut)):.2f}°")
+        print(f"   Angle range: {np.degrees(np.nanmin(self.angle_lut)):.2f}° ~ {np.degrees(np.nanmax(self.angle_lut)):.2f}°")
+
+        valid_angles = self.angle_lut[~np.isnan(self.angle_lut) & (self.angle_lut > 0.0)]
         print(f"   Valid angles count: {len(valid_angles)}")
         if len(valid_angles) > 0:
             print(f"   Valid angle stats: mean={np.degrees(valid_angles.mean()):.2f}°, std={np.degrees(valid_angles.std()):.2f}°")
@@ -263,7 +247,7 @@ def create_vadas_lookup_table(image_size: Tuple[int, int],
     print(f"   Target image size: {image_size}")
     
     # LUT 생성기 생성
-    generator = VADASLookupTableGenerator(image_size, calib_data, use_cache)
+    generator = VADASLookupTableGenerator(image_size, calib_data, use_cache, use_roots=True, verbose=False)
     
     # LUT 저장
     generator.save_lookup_table(output_path)
@@ -310,7 +294,7 @@ def test_vadas_polynomial():
         rd_expected = rd_expected / div
         
         # 역 계산
-        theta_reconstructed = generator._inverse_polynomial_newton(rd_expected)
+        theta_reconstructed = generator._inverse_polynomial_roots(rd_expected)
         
         error = abs(theta - theta_reconstructed)
         print(f"   r_d = {rd_expected:.6f}, Reconstructed Theta = {np.degrees(theta_reconstructed):.2f}°, Error = {np.degrees(error):.6f}°")

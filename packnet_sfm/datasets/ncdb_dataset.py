@@ -157,7 +157,7 @@ class NcdbDataset(Dataset):
         
         # Check depth file if needed
         if self.with_depth:
-            depth_path = self.dataset_root / entry['dataset_root'] / 'new_depth_maps' / f"{stem}.png"
+            depth_path = self.dataset_root / entry['dataset_root'] / 'newest_depth_maps' / f"{stem}.png"
             if not depth_path.exists():
                 self._file_cache[idx] = False
                 return False
@@ -174,7 +174,7 @@ class NcdbDataset(Dataset):
         
         # Construct paths
         image_path = self.dataset_root / entry['dataset_root'] / 'image_a6' / f"{stem}.png"
-        depth_path = self.dataset_root / entry['dataset_root'] / 'new_depth_maps' / f"{stem}.png"
+        depth_path = self.dataset_root / entry['dataset_root'] / 'newest_depth_maps' / f"{stem}.png"
         
         # Load image
         image = load_image(str(image_path))
