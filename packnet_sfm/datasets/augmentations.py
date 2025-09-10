@@ -6,6 +6,7 @@ import random
 import torchvision.transforms as transforms
 from torchvision.transforms import InterpolationMode
 from PIL import Image
+import torch
 
 from packnet_sfm.utils.misc import filter_dict
 from packnet_sfm.utils.types import is_seq
@@ -204,8 +205,7 @@ def to_tensor_sample(sample, tensor_type='torch.FloatTensor'):
         'rgb', 'rgb_original', 'depth', 'input_depth',
     ]):
         if isinstance(sample[key], Image.Image):
-            # Convert PIL Image to NumPy array first, then to Tensor
-            sample[key] = transforms.ToTensor()(np.array(sample[key])).type(tensor_type)
+            sample[key] = transforms.ToTensor()(sample[key]).type(tensor_type)
         elif isinstance(sample[key], np.ndarray):
             # For NumPy arrays, ToTensor should work directly
             sample[key] = transforms.ToTensor()(sample[key]).type(tensor_type)
@@ -220,7 +220,7 @@ def to_tensor_sample(sample, tensor_type='torch.FloatTensor'):
         new_list = []
         for item in sample[key]:
             if isinstance(item, Image.Image):
-                new_list.append(transforms.ToTensor()(np.array(item)).type(tensor_type))
+                new_list.append(transforms.ToTensor()(item).type(tensor_type))
             elif isinstance(item, np.ndarray):
                 new_list.append(transforms.ToTensor()(item).type(tensor_type))
             else:

@@ -3,12 +3,10 @@ model:
     loss:
         supervised_method: 'sparse-silog'
         supervised_num_scales: 1
-        supervised_loss_weight: 1.0
+        supervised_loss_weight: 1.0  # Pure supervised learning
     optimizer:
         name: 'Adam'
         depth:
-            lr: 0.0002
-        pose:
             lr: 0.0002
     scheduler:
         name: 'StepLR'
@@ -18,10 +16,9 @@ model:
         name: 'ResNetSAN01'
         version: '18A'
         dropout: 0.1
-        # 🔧 기존 구조로 설정
-        use_film: false           # 체크포인트와 동일하게
-        film_scales: [0]         # 체크포인트와 동일하게
-        use_enhanced_lidar: false  # ❌ Enhanced 비활성화
+        use_film: false
+        film_scales: [0]
+        use_enhanced_lidar: false
     params:
         crop: ''
         min_depth: 0.0
@@ -30,41 +27,40 @@ model:
 
 datasets:
     train:
-        batch_size: 4 # Reduced for larger image size
+        batch_size: 4  # Increased since no context frames needed
         dataset: ['ncdb']
         path: ['/workspace/data/ncdb-cls']
         split: ['splits/combined_train.json']
         repeat: [1]
         mask_file: ['binary_mask.png']
     validation:
-        batch_size: 1 # Reduced for larger image size
+        batch_size: 1
         dataset: ['ncdb']
         path: ['/workspace/data/ncdb-cls']
         split: ['splits/combined_val.json']
         mask_file: ['binary_mask.png']
     test:
-        batch_size: 1 # Reduced for larger image size
+        batch_size: 1
         dataset: ['ncdb']
         path: ['/workspace/data/ncdb-cls']
         split: ['splits/combined_test.json']
         mask_file: ['binary_mask.png']
 
-# 🆕 중간 평가 설정
 arch:
     seed: 42
     clip_grad: 10.0
-    max_epochs: 30 # Increased for longer training
+    max_epochs: 30
     eval_during_training: false
     eval_progress_interval: 0.5
     eval_subset_size: 100
 
 checkpoint:
-    filepath: 'checkpoints/resnetsan01_newest_test/'
+    filepath: 'checkpoints/resnetsan01_supervised_only/'
     save_top_k: -1
 
 save:
-    folder: 'outputs/resnetsan01_newest_test/'
+    folder: 'outputs/resnetsan01_supervised_only/'
 
 tensorboard:
     dry_run: false
-    log_frequency: 10 # Log depth every 10 steps
+    log_frequency: 10

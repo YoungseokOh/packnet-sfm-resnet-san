@@ -1,0 +1,88 @@
+model:
+    name: 'SemiSupCompletionModel'
+    loss:
+        supervised_method: 'sparse-silog'
+        supervised_num_scales: 1
+        supervised_loss_weight: 0.8  # ❗ 0.5로 변경하여 supervised + self-supervised 결합
+        # ❗ Self-supervised 설정 추가
+        use_fisheye_loss: true
+        ssim_loss_weight: 0.85
+        smooth_loss_weight: 0.001
+        photometric_reduce_op: 'mean'
+        clip_loss: 0.0
+        automask_loss: false
+        # 🔧 올바른 LUT 경로로 변경
+        fisheye_lut_path: 'luts/vadas_1536_1920.pkl'
+    optimizer:
+        name: 'Adam'
+        depth:
+            lr: 0.0002
+        pose:
+            lr: 0.0002
+    scheduler:
+        name: 'StepLR'
+        step_size: 30
+        gamma: 0.5
+    depth_net:
+        name: 'ResNetSAN01'
+        version: '18A'
+        dropout: 0.1
+        # 🔧 기존 구조로 설정
+        use_film: false           # 체크포인트와 동일하게
+        film_scales: [0]         # 체크포인트와 동일하게
+        use_enhanced_lidar: false  # ❌ Enhanced 비활성화
+    # ❗ Pose network 추가 (self-supervised 학습을 위해 필요)
+    pose_net:
+        name: 'PoseResNet'
+        version: '18pt'
+    params:
+        crop: ''
+        min_depth: 0.0
+        max_depth: 80.0
+        scale_output: 'top-center'
+
+datasets:
+    train:
+        batch_size: 2 # ❗ Context frames 때문에 더 줄임
+        dataset: ['ncdb']
+        path: ['/workspace/data/ncdb-cls']
+        split: ['splits/combined_train.json']
+        repeat: [1]
+        mask_file: ['binary_mask.png']
+        # ❗ Context frames 설정 추가
+        back_context: 1
+        forward_context: 1
+    validation:
+        batch_size: 1
+        dataset: ['ncdb']
+        path: ['/workspace/data/ncdb-cls']
+        split: ['splits/combined_val.json']
+        mask_file: ['binary_mask.png']
+        back_context: 1
+        forward_context: 1
+    test:
+        batch_size: 1
+        dataset: ['ncdb']
+        path: ['/workspace/data/ncdb-cls']
+        split: ['splits/combined_test.json']
+        mask_file: ['binary_mask.png']
+
+# 🆕 중간 평가 설정
+arch:
+    seed: 42
+    clip_grad: 10.0
+    max_epochs: 30 # Increased for longer training
+    eval_during_training: false
+    eval_progress_interval: 0.5
+    eval_subset_size: 100
+
+checkpoint:
+    filepath: 'checkpoints/resnetsan01_newest_test_self_sup_supervised/'
+    save_top_k: -1
+
+save:
+    folder: 'outputs/resnetsan01_newest_test_self_sup_supervised/'
+
+tensorboard:
+    dry_run: false
+    log_frequency: 10 # Log depth every 10 steps

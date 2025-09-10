@@ -3,6 +3,7 @@
 from functools import lru_cache
 import torch
 import torch.nn as nn
+import numpy as np  # 🆕 추가
 
 from packnet_sfm.geometry.pose import Pose
 from packnet_sfm.geometry.camera_utils import scale_intrinsics
@@ -193,31 +194,23 @@ class Camera(nn.Module):
 
 class FisheyeCamera(nn.Module):
     """
-    Differentiable camera class implementing projection
-    functions for a fisheye model (VADAS).
+    Simplified fisheye camera for VADAS model - focused on core functionality
     """
     def __init__(self, intrinsics, Tcw=None, image_size=None):
-        """
-        Initializes the FisheyeCamera class.
-
-        Parameters
-        ----------
-        intrinsics : dict
-            Dictionary containing fisheye camera intrinsic parameters.
-            Expected keys: 'k', 's', 'div', 'ux', 'uy'.
-        Tcw : Pose
-            Camera -> World pose transformation.
-        image_size : tuple (H, W)
-            The size of the image.
-        """
         super().__init__()
-        self.k = intrinsics['k']
-        self.s = intrinsics['s']
-        self.div = intrinsics['div']
-        self.ux = intrinsics['ux']
-        self.uy = intrinsics['uy']
-        self.Tcw = Pose.identity(len(self.k)) if Tcw is None else Tcw
+        self.intrinsics = intrinsics
+        self.Tcw = Pose.identity(1) if Tcw is None else Tcw
         self.image_size = image_size
+        
+        # Extract individual parameters
+        if isinstance(intrinsics, dict):
+            self.k = intrinsics['k']
+            self.s = intrinsics['s'] 
+            self.div = intrinsics['div']
+            self.ux = intrinsics['ux']
+            self.uy = intrinsics['uy']
+        else:
+            raise ValueError("Intrinsics must be a dictionary with keys: k, s, div, ux, uy")
 
     def __len__(self):
         """Batch size of the camera intrinsics"""
@@ -241,154 +234,170 @@ class FisheyeCamera(nn.Module):
 
     def reconstruct(self, depth, frame='w'):
         """
-        Reconstructs pixel-wise 3D points from a depth map using the fisheye model.
-
-        Parameters
-        ----------
-        depth : torch.Tensor [B,1,H,W]
-            Depth map for the camera
-        frame : 'w' or 'c'
-            Reference frame: 'c' for camera and 'w' for world
-
-        Returns
-        -------
-        points : torch.tensor [B,3,H,W]
-            Pixel-wise 3D points
+        🎯 Simplified but accurate fisheye reconstruction using improved polynomial inversion
+        Based on fisheye_test-master approach but simplified
         """
-        B, C, H, W = depth.shape
-        assert C == 1
+        B, _, H, W = depth.shape
+        device = depth.device
+        
+        # Create pixel grid
+        i_range = torch.arange(H, dtype=torch.float32, device=device)
+        j_range = torch.arange(W, dtype=torch.float32, device=device)
+        ii, jj = torch.meshgrid(i_range, j_range)  # Remove indexing parameter for compatibility
+        flat_grid = torch.stack([jj.flatten(), ii.flatten()], dim=0)  # [2, HW]
+        flat_grid = flat_grid.unsqueeze(0).repeat(B, 1, 1)  # [B, 2, HW]
 
-        # Create flat index grid
-        grid = image_grid(B, H, W, depth.dtype, depth.device, normalized=False)  # [B,3,H,W]
-        flat_grid = grid.view(B, 3, -1)  # [B,3,HW]
+        u_pixels = flat_grid[:, 0, :]  # [B, HW]
+        v_pixels = flat_grid[:, 1, :]  # [B, HW]
 
-        # Extract pixel coordinates (u, v)
-        u_pixels = flat_grid[:, 0, :]
-        v_pixels = flat_grid[:, 1, :]
+        # Prepare intrinsics with proper broadcasting
+        def _shape_param(p):
+            if isinstance(p, torch.Tensor):
+                if p.dim() == 0:
+                    return p.view(1, 1, 1).expand(B, 1, 1)
+                elif p.dim() == 1 and len(p) == B:
+                    return p.view(B, 1, 1)
+                elif p.dim() == 1 and len(p) == 1:
+                    return p.view(1, 1, 1).expand(B, 1, 1)
+                elif p.dim() == 2 and p.shape[0] == B:
+                    return p.view(B, 1, 1)
+                else:
+                    # Handle multi-element tensors safely
+                    return p.view(-1, 1, 1).expand(B, 1, 1)
+            else:
+                # Handle scalar values
+                return torch.tensor(float(p), device=device).view(1, 1, 1).expand(B, 1, 1)
 
-        # Denormalize pixel coordinates to get original pixel values
-        u = u_pixels
-        v = v_pixels
+        ux = _shape_param(self.ux)
+        uy = _shape_param(self.uy)
+        s = _shape_param(self.s)
+        div = _shape_param(self.div)
 
-        # Inverse of final pixel coordinates using intrinsic parameters
-        x_dist = (u - self.ux.unsqueeze(1)) / self.s.unsqueeze(1)
-        y_dist = (v - self.uy.unsqueeze(1)) / self.div.unsqueeze(1)
+        # Distorted coordinates (fisheye_test-master style)
+        x_dist = (u_pixels.unsqueeze(1) - ux) / s  # [B, 1, HW]
+        y_dist = (v_pixels.unsqueeze(1) - uy) / div
 
-        # Calculate distorted radius r_d
-        r_d = torch.sqrt(x_dist**2 + y_dist**2)
+        # Distorted radius
+        r_d = torch.sqrt(x_dist ** 2 + y_dist ** 2)
 
-        # Inverse of polynomial distortion to theta
-        # This is the most complex part, as it requires solving a polynomial.
-        # For simplicity, we will approximate by assuming theta_poly is approximately theta for small r_d
-        # A more accurate solution would involve numerical methods or a pre-computed lookup table.
-        # For now, we'll use a simplified inverse of the polynomial.
-        # This is a placeholder and might need more robust implementation for high accuracy.
-        theta = r_d # Approximation: assuming r_d is close to theta for inverse.
+        # 🎯 Improved polynomial inversion (key improvement from fisheye_test-master)
+        k_coeffs = self.k  # [B, 7] or [7]
+        if k_coeffs.dim() == 1:
+            k_coeffs = k_coeffs.unsqueeze(0).expand(B, -1)
+        
+        # Initial guess: theta ≈ r_d
+        theta = r_d.squeeze(1)  # [B, HW]
+        
+        # Newton-Raphson refinement (2 iterations for good accuracy vs speed)
+        for _ in range(2):
+            # f(θ) = k0*θ + k1*θ² + ... + k6*θ⁷ - r_d
+            theta_powers = torch.stack([theta**(i+1) for i in range(7)], dim=-1)  # [B, HW, 7]
+            f_theta = torch.sum(k_coeffs.unsqueeze(1) * theta_powers, dim=-1) - r_d.squeeze(1)
+            
+            # f'(θ) = k0 + 2*k1*θ + ... + 7*k6*θ⁶
+            df_theta = torch.sum(k_coeffs.unsqueeze(1) * torch.stack([
+                (i+1) * theta**i for i in range(7)
+            ], dim=-1), dim=-1)
+            
+            # Newton update with safety
+            df_theta = torch.clamp(df_theta, min=1e-8)
+            theta = theta - f_theta / df_theta
+            theta = torch.clamp(theta, min=0, max=np.pi/2)  # Reasonable bounds
 
-        # Inverse of r = tan(theta)
-        r = torch.tan(theta)
+        # Convert to Cartesian (fisheye_test-master approach)
+        r_world = torch.tan(theta)  # Use tan(theta) instead of sin/cos
+        r_d_safe = torch.clamp(r_d.squeeze(1), min=1e-8)
+        scale = r_world / r_d_safe
+        
+        x_norm = scale * x_dist.squeeze(1)
+        y_norm = scale * y_dist.squeeze(1)
+        
+        # 3D points
+        depth_flat = depth.view(B, -1)
+        x_flat = x_norm * depth_flat
+        y_flat = y_norm * depth_flat
+        z_flat = depth_flat
 
-        # Avoid division by zero for r_d
-        r_d_safe = r_d.clone()
-        r_d_safe[r_d < sys.float_info.epsilon] = sys.float_info.epsilon
+        # Reshape to proper format
+        X_cam = torch.stack([x_flat, y_flat, z_flat], dim=1)  # [B, 3, HW]
+        X_cam = X_cam.view(B, 3, H, W)
 
-        # Inverse of projection to distorted image coordinates
-        x_norm = (r / r_d_safe) * x_dist
-        y_norm = (r / r_d_safe) * y_dist
-
-        # Scale rays to metric depth
-        Xc = torch.stack([x_norm * depth.view(B, -1),
-                          y_norm * depth.view(B, -1),
-                          depth.view(B, -1)], dim=1) # [B,3,HW]
-
-        # If in camera frame of reference
-        if frame == 'c':
-            return Xc.view(B, 3, H, W)
-        # If in world frame of reference
-        elif frame == 'w':
-            return (self.Twc @ Xc).view(B, 3, H, W)
-        # If none of the above
+        # Transform to world coordinates if needed
+        if frame == 'w':
+            X_cam_hom = torch.cat([X_cam.view(B, 3, -1), 
+                                 torch.ones(B, 1, H*W, device=device)], dim=1)
+            X_world_hom = self.Twc.mat @ X_cam_hom  # Use .mat instead of .matrix
+            X_world = X_world_hom[:, :3, :].view(B, 3, H, W)
+            return X_world
         else:
-            raise ValueError('Unknown reference frame {}'.format(frame))
+            return X_cam
 
     def project(self, X, frame='w'):
         """
-        Projects 3D points onto the fisheye image plane.
-        This implementation is based on the VADAS camera model.
-
-        Parameters
-        ----------
-        X : torch.Tensor [B,3,H,W] or [B,3,N]
-            3D points to be projected.
-        frame : 'w' or 'c'
-            Reference frame: 'c' for camera and 'w' for world.
-
-        Returns
-        -------
-        points : torch.Tensor [B,H,W,2] or [B,N,2]
-            2D projected points, normalized to [-1, 1] range.
+        Simplified fisheye projection (VADAS model)
         """
         if len(X.shape) == 4:
             B, C, H, W = X.shape
             assert C == 3
-            X_flat = X.view(B, 3, -1)
+            Xc4d = self.Tcw @ X if frame == 'w' else X
+            Xc = Xc4d.view(B, 3, -1)  # [B,3,HW]
         elif len(X.shape) == 3:
             B, C, N = X.shape
             assert C == 3
-            X_flat = X
             H, W = self.image_size
-            if H is None or W is None:
-                raise ValueError("image_size must be provided for 3D point cloud projection.")
+            X4d = X.view(B, 3, H, W)
+            Xc4d = self.Tcw @ X4d if frame == 'w' else X4d
+            Xc = X4d.view(B, 3, -1)
         else:
-            raise ValueError("Input X must be of shape [B,3,H,W] or [B,3,N]")
-
-
-        # Transform points to camera coordinates
-        if frame == 'w':
-            Xc = self.Tcw @ X_flat
-        elif frame == 'c':
-            Xc = X_flat
-        else:
-            raise ValueError('Unknown reference frame {}'.format(frame))
-
-        # Normalize by depth
-        # Add a small epsilon to Z to avoid division by zero
-        Z = Xc[:, 2, :].clamp(min=sys.float_info.epsilon)
-        x_norm = Xc[:, 0, :] / Z
-        y_norm = Xc[:, 1, :] / Z
-
-        # Fisheye projection logic based on VADAS model
-        r = torch.sqrt(x_norm**2 + y_norm**2)
+            raise ValueError('Input X must be [B,3,H,W] or [B,3,N]')
+        
+        HW = Xc.shape[-1]
+        
+        # Normalize
+        Z = Xc[:, 2].clamp(min=1e-8)      # [B,HW]
+        x_norm = Xc[:, 0] / Z             # [B,HW]
+        y_norm = Xc[:, 1] / Z             # [B,HW]
+        
+        # Radial quantities
+        r = torch.sqrt(x_norm ** 2 + y_norm ** 2)  # [B,HW]
         theta = torch.atan(r)
-
-        # Apply polynomial distortion to theta
-        theta_poly = self.k[:, 0].unsqueeze(1)
+        
+        # Polynomial distortion (VADAS model)
+        if self.k.dim() == 1:
+            k = self.k.view(1, -1).expand(B, -1)
+        else:
+            k = self.k
+        
+        theta_poly = k[:, 0:1]  # [B,1]
         for i in range(1, 7):
-            theta_poly = theta_poly + self.k[:, i].unsqueeze(1) * torch.pow(theta, i)
-
-        # Calculate distorted radius
-        r_d = theta_poly
-
-        # Avoid division by zero for r
-        r_safe = r.clone()
-        r_safe[r < sys.float_info.epsilon] = sys.float_info.epsilon
-
-        # Project to distorted image coordinates
-        x_dist = (r_d / r_safe) * x_norm
-        y_dist = (r_d / r_safe) * y_norm
-
-        # Final pixel coordinates using intrinsic parameters
-        u = self.s.unsqueeze(1) * x_dist + self.ux.unsqueeze(1)
-        v = self.div.unsqueeze(1) * y_dist + self.uy.unsqueeze(1)
-
-        # Normalize to [-1, 1]
+            theta_powers = torch.pow(theta, i)  # [B,HW]
+            theta_poly = theta_poly + k[:, i:i+1] * theta_powers
+        
+        r_d = theta_poly if theta_poly.shape[-1] == HW else theta_poly.repeat(1, HW)
+        r_safe = torch.where(r > 1e-8, r, torch.full_like(r, 1e-8))
+        scale = r_d / r_safe  # [B,HW]
+        
+        x_dist = scale * x_norm
+        y_dist = scale * y_norm
+        
+        # Intrinsic params to shape [B]
+        def _vec(p):
+            return p if p.dim() == 1 else p.view(p.shape[0])
+        
+        s = _vec(self.s)
+        div = _vec(self.div)
+        ux = _vec(self.ux)
+        uy = _vec(self.uy)
+        
+        # Pixel coordinates
+        u = s[:, None] * x_dist + ux[:, None]   # [B,HW]
+        v = div[:, None] * y_dist + uy[:, None] # [B,HW]
+        
+        # Normalize to [-1,1]
         u_norm = 2 * u / (W - 1) - 1.
         v_norm = 2 * v / (H - 1) - 1.
-
-        # Stack and reshape
-        coords = torch.stack([u_norm, v_norm], dim=-1) # [B, N, 2]
         
+        coords = torch.stack([u_norm, v_norm], dim=-1)  # [B,HW,2]
         if len(X.shape) == 4:
             return coords.view(B, H, W, 2)
-        else:
-            return coords
+        return coords

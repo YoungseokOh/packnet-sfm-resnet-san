@@ -163,6 +163,7 @@ class SupervisedLoss(LossBase):
         if self.supervised_method.startswith('sparse'):
             total_loss = 0.0
             eps = 1e-6
+            invalid_zero_penalties = []
 
             for i in range(num_scales):
                 # 기존 마스크: Ground Truth가 0보다 큰 픽셀
@@ -183,8 +184,19 @@ class SupervisedLoss(LossBase):
 
                     current_mask = valid_mask & masks[i].to(valid_mask.device) # Combine masks
 
+                # 유효 픽셀 supervised 손실(기존 방식 유지: invalid는 eps로 채워 diff=0)
                 pred_filled = inv_depths[i].masked_fill(~current_mask, eps)
                 gt_filled = gt_inv_depths[i].masked_fill(~current_mask, eps)
+                
+                # 비유효 픽셀에 대해 예측을 0으로 수렴시키는 추가 패널티
+                invalid_mask = (~current_mask).detach()
+                if invalid_mask.any():
+                    # print(f"DEBUG: calculate_loss - inv_depths[i] shape: {inv_depths[i].shape}")
+                    # print(f"DEBUG: calculate_loss - invalid_mask shape: {invalid_mask.shape}")
+                    # 절대값 L1 패널티 (평균) -> 예측 inverse depth를 0으로 유도
+                    invalid_penalty = inv_depths[i][invalid_mask].abs().mean()
+                else:
+                    invalid_penalty = torch.zeros(1, device=inv_depths[i].device, dtype=inv_depths[i].dtype)
                 
                 # Enhanced or Progressive SSI Loss handling
                 if hasattr(self.loss_func, 'forward') and 'mask' in self.loss_func.forward.__code__.co_varnames:
@@ -199,8 +211,12 @@ class SupervisedLoss(LossBase):
                     else:
                          loss_i = self.loss_func(pred_filled, gt_filled)
 
-                total_loss += loss_i
+                total_loss += loss_i + invalid_penalty
+                invalid_zero_penalties.append(invalid_penalty.detach())
 
+            # 메트릭 저장 (평균 invalid 패널티)
+            if invalid_zero_penalties:
+                self.add_metric('invalid_zero_penalty', torch.stack(invalid_zero_penalties).mean())
             return total_loss / float(num_scales)
         else:
             # Dense loss handling remains the same
@@ -213,6 +229,13 @@ class SupervisedLoss(LossBase):
         """Forward with progress information for enhanced losses"""
         # Store progress for enhanced losses
         self._progress = progress
+        # print(f"DEBUG: SupervisedLoss.forward - gt_inv_depth shape: {gt_inv_depth.shape}")
+        
+        # 🔧 Fix dimension mismatch: squeeze extra dimensions from GT depth
+        while gt_inv_depth.dim() > 4:
+            gt_inv_depth = gt_inv_depth.squeeze(2)  # Remove extra dimensions
+        
+        # print(f"DEBUG: SupervisedLoss.forward - gt_inv_depth after squeeze: {gt_inv_depth.shape}")
         
         # If using progressive scaling
         self.n = self.progressive_scaling(progress)

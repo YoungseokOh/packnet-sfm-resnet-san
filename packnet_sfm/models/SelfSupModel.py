@@ -2,8 +2,8 @@
 
 from packnet_sfm.models.SfmModel import SfmModel
 from packnet_sfm.losses.multiview_photometric_loss import MultiViewPhotometricLoss
+from packnet_sfm.losses.fisheye_multiview_photometric_loss import FisheyeMultiViewPhotometricLoss  # Added
 from packnet_sfm.models.model_utils import merge_outputs
-
 
 class SelfSupModel(SfmModel):
     """
@@ -18,8 +18,28 @@ class SelfSupModel(SfmModel):
     def __init__(self, **kwargs):
         # Initializes SfmModel
         super().__init__(**kwargs)
-        # Initializes the photometric loss
-        self._photometric_loss = MultiViewPhotometricLoss(**kwargs)
+        # Flag for fisheye loss usage
+        self.use_fisheye_loss = kwargs.get('loss', {}).get('use_fisheye_loss', False)
+
+        # Instantiate appropriate photometric loss
+        if self.use_fisheye_loss:
+            # Map config keys to fisheye loss expected names
+            fisheye_args = {
+                'num_scales': 1,  # 🔧 LUT 크기 일치를 위해 1스케일로 고정
+                'ssim_loss_weight': kwargs.get('ssim_loss_weight', 0.85),
+                'smooth_loss_weight': kwargs.get('smooth_loss_weight', 0.001),
+                'photometric_reduce_op': kwargs.get('photometric_reduce_op', 'mean'),
+                'clip_loss': kwargs.get('clip_loss', 0.0),
+                'automask_loss': kwargs.get('automask_loss', False),
+                'lut_path': kwargs.get('fisheye_lut_path', None),
+                'padding_mode': kwargs.get('padding_mode', 'zeros'),
+                'disp_norm': kwargs.get('disp_norm', True),
+                'C1': kwargs.get('C1', 1e-4),
+                'C2': kwargs.get('C2', 9e-4),
+            }
+            self._photometric_loss = FisheyeMultiViewPhotometricLoss(**fisheye_args)
+        else:
+            self._photometric_loss = MultiViewPhotometricLoss(**kwargs)
 
     @property
     def logs(self):
@@ -30,7 +50,7 @@ class SelfSupModel(SfmModel):
         }
 
     def self_supervised_loss(self, image, ref_images, inv_depths, poses,
-                             intrinsics_list, distortion_coeffs, # Changed intrinsics to intrinsics_list, added distortion_coeffs
+                             intrinsics_list, distortion_coeffs,
                              return_logs=False, progress=0.0, mask=None):
         """
         Calculates the self-supervised photometric loss.
@@ -61,24 +81,32 @@ class SelfSupModel(SfmModel):
         output : dict
             Dictionary containing a "loss" scalar a "metrics" dictionary
         """
-        # Prepare intrinsics dictionary for MultiViewPhotometricLoss
-        # MultiViewPhotometricLoss expects a dict for intrinsics
-        # We are passing the same intrinsics for both original and reference cameras for now
-        # If ref_intrinsics are different, they should be passed separately from batch
+        # Check if we have valid distortion coeffs for fisheye
+        use_fisheye = self.use_fisheye_loss and distortion_coeffs is not None
         
-        # Ensure distortion_coeffs are on the correct device and have correct batch size
-        # This is handled in NcdbDataset, but good to be explicit if needed
+        # Additional validation for fisheye coeffs
+        if use_fisheye and isinstance(distortion_coeffs, dict):
+            required_keys = {'k', 's', 'div', 'ux', 'uy'}
+            if not all(key in distortion_coeffs for key in required_keys):
+                use_fisheye = False
+                if not hasattr(self, '_fisheye_disabled_warn_logged'):
+                    print('[SelfSupModel] Fisheye requested but distortion coeffs incomplete; falling back to pinhole.')
+                    self._fisheye_disabled_warn_logged = True
+        elif use_fisheye:
+            use_fisheye = False
+            if not hasattr(self, '_fisheye_disabled_warn_logged'):
+                print('[SelfSupModel] Fisheye requested but distortion coeffs missing; falling back to pinhole.')
+                self._fisheye_disabled_warn_logged = True
         
-        # For now, we assume intrinsics_list and distortion_coeffs are for the current image
-        # and will be used for both original and reference cameras in the photometric loss.
-        
-        # The MultiViewPhotometricLoss expects a dict for intrinsics,
-        # which is already prepared in NcdbDataset as 'distortion_coeffs'.
-        # We just need to pass it correctly.
-        
-        return self._photometric_loss(
-            image, ref_images, inv_depths, distortion_coeffs, distortion_coeffs, poses, # Passed distortion_coeffs for both
-            return_logs=return_logs, progress=progress, mask=mask)
+        if use_fisheye:
+            return self._photometric_loss(
+                image, ref_images, inv_depths, distortion_coeffs, poses,
+                return_logs=return_logs, progress=progress)
+        else:
+            # Fallback to pinhole model
+            return self._photometric_loss(
+                image, ref_images, inv_depths, intrinsics_list, intrinsics_list, poses,
+                return_logs=return_logs, progress=progress, mask=mask)
 
     def forward(self, batch, return_logs=False, progress=0.0):
         """
@@ -99,23 +127,21 @@ class SelfSupModel(SfmModel):
             Dictionary containing a "loss" scalar and different metrics and predictions
             for logging and downstream usage.
         """
-        # Calculate predicted depth and pose output
         output = super().forward(batch, return_logs=return_logs)
         if not self.training:
-            # If not training, no need for self-supervised loss
             return output
-        else:
-            # Otherwise, calculate self-supervised loss
-            self_sup_output = self.self_supervised_loss(
-                batch['rgb_original'], batch['rgb_context_original'],
-                output['inv_depths'], output['poses'],
-                batch['intrinsics'], # This is the full VADAS intrinsic list
-                batch['distortion_coeffs'], # Added distortion_coeffs
-                return_logs=return_logs, progress=progress,
-                mask=batch.get('mask', None) # Pass mask if available
-            )
-            # Return loss and metrics
-            return {
-                'loss': self_sup_output['loss'],
-                **merge_outputs(output, self_sup_output),
-            }
+        rgb_target = batch.get('rgb_original', batch.get('rgb'))
+        ref_context = batch.get('rgb_context_original', batch.get('rgb_context', [])) or []
+        self_sup_output = self.self_supervised_loss(
+            rgb_target,
+            ref_context,
+            output['inv_depths'], output['poses'],
+            batch.get('intrinsics', None),
+            batch.get('distortion_coeffs', None),
+            return_logs=return_logs, progress=progress,
+            mask=batch.get('mask', None)
+        )
+        return {
+            'loss': self_sup_output['loss'],
+            **merge_outputs(output, self_sup_output),
+        }

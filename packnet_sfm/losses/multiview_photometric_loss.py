@@ -124,7 +124,7 @@ class MultiViewPhotometricLoss(LossBase):
 
 ########################################################################################################################
 
-    def warp_ref_image(self, inv_depths, ref_image, intrinsics, ref_intrinsics, poses, image_size): # Changed K, ref_K to intrinsics, ref_intrinsics, added image_size
+    def warp_ref_image(self, inv_depths, ref_image, intrinsics, ref_intrinsics, pose, image_size): # Changed K, ref_K to intrinsics, ref_intrinsics, added image_size
         """
         Warps a reference image to produce a reconstruction of the original one.
 
@@ -179,7 +179,7 @@ class MultiViewPhotometricLoss(LossBase):
                 'ux': (ref_intrinsics['ux'].clone() + 0.5) * scale_factor_w - 0.5,
                 'uy': (ref_intrinsics['uy'].clone() + 0.5) * scale_factor_h - 0.5,
             }
-            ref_cams.append(FisheyeCamera(intrinsics=scaled_ref_intrinsics, Tcw=poses, image_size=(DH, DW)).to(device))
+            ref_cams.append(FisheyeCamera(intrinsics=scaled_ref_intrinsics, Tcw=pose, image_size=(DH, DW)).to(device))
         
         # View synthesis
         depths = [inv2depth(inv_depths[i]) for i in range(self.n)]

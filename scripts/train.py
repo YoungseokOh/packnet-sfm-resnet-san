@@ -40,6 +40,9 @@ def train(file):
     # Initialize horovod (mock for single GPU)
     hvd_init()
 
+    # Remove @ prefix if present
+    if file.startswith('@'):
+        file = file[1:]
     # Produce configuration and checkpoint from filename
     config, ckpt = parse_train_file(file)
 

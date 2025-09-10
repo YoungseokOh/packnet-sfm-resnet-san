@@ -40,6 +40,8 @@ cfg.model.loss.supervised_method = 'sparse-l1' # Method for depth supervision
 cfg.model.loss.supervised_num_scales = 4       # Number of scales for supervised learning
 cfg.model.loss.supervised_loss_weight = 0.9    # Supervised loss weight
 cfg.model.loss.consistency_loss_weight = 0.1   # Consistency loss weight (for Yolov8 Semi-Supervised Learning)
+cfg.model.loss.use_fisheye_loss = False        # Use fisheye-specific photometric loss class
+cfg.model.loss.fisheye_lut_path = 'luts/vadas_1920_1536.pkl'  # LUT path for fisheye inverse mapping (if available)
 ########################################################################################################################
 ### MODEL.DEPTH_NET
 ########################################################################################################################
@@ -157,8 +159,8 @@ cfg.datasets.augmentation.cutmix.prob = 0.5                     # Probability of
 cfg.datasets.train = CN()
 cfg.datasets.train.batch_size = 8                   # Training batch size
 cfg.datasets.train.num_workers = 16                 # Training number of workers
-cfg.datasets.train.back_context = 1                 # Training backward context
-cfg.datasets.train.forward_context = 1              # Training forward context
+cfg.datasets.train.back_context = 0                 # Training backward context (default 0 for supervised)
+cfg.datasets.train.forward_context = 0              # Training forward context (default 0 for supervised)
 cfg.datasets.train.dataset = []                     # Training dataset
 cfg.datasets.train.path = []                        # Training data path
 cfg.datasets.train.split = []                       # Training split

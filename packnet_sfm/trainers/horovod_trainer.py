@@ -168,7 +168,7 @@ class HorovodTrainer(BaseTrainer):
             module.train()
 
     def _evaluate_single_dataloader(self, module, dataloader, eval_size, mode_name):
-        """단일 데이터로더 평가 - 간소화된 버전"""
+        """단일 데이터로더 평가 - 간소화된 버전 with image resizing"""
         metrics = []
         
         if self.is_rank_0:
@@ -179,6 +179,46 @@ class HorovodTrainer(BaseTrainer):
                 break
             
             try:
+                # 🆕 Validation 시 이미지 크기 맞추기
+                # Training config에서 image_shape 가져오기
+                train_config = module.config.datasets.train
+                image_shape = getattr(train_config, 'image_shape', None)
+                
+                if image_shape and len(image_shape) == 2:
+                    # RGB 이미지 리사이즈
+                    if 'rgb' in batch and hasattr(batch['rgb'], 'shape'):
+                        current_shape = batch['rgb'].shape[-2:]  # [H, W]
+                        target_shape = tuple(image_shape)  # (H, W)
+                        
+                        if current_shape != target_shape:
+                            # 🔧 이미지 크기 맞추기
+                            import torch.nn.functional as F
+                            batch['rgb'] = F.interpolate(
+                                batch['rgb'], size=target_shape, 
+                                mode='bilinear', align_corners=False
+                            )
+                            
+                            # input_depth도 있으면 리사이즈
+                            if 'input_depth' in batch and batch['input_depth'] is not None:
+                                batch['input_depth'] = F.interpolate(
+                                    batch['input_depth'], size=target_shape,
+                                    mode='nearest'  # depth는 nearest 사용
+                                )
+                            
+                            # context 이미지들도 리사이즈
+                            if 'rgb_context' in batch and batch['rgb_context']:
+                                resized_context = []
+                                for ctx_img in batch['rgb_context']:
+                                    if hasattr(ctx_img, 'shape'):
+                                        ctx_resized = F.interpolate(
+                                            ctx_img, size=target_shape,
+                                            mode='bilinear', align_corners=False
+                                        )
+                                        resized_context.append(ctx_resized)
+                                    else:
+                                        resized_context.append(ctx_img)
+                                batch['rgb_context'] = resized_context
+                
                 batch = sample_to_cuda(batch)
                 
                 # 🔍 배치 정보 확인 (첫 번째 샘플만)
@@ -187,8 +227,10 @@ class HorovodTrainer(BaseTrainer):
                     if has_input_depth:
                         valid_points = (batch['input_depth'] > 0).sum().item()
                         print(f"     LiDAR points: {valid_points}")
+                        print(f"     Image shape: {batch['rgb'].shape[-2:]}")
                     else:
                         print(f"     RGB-only mode")
+                        print(f"     Image shape: {batch['rgb'].shape[-2:]}")
                 
                 # validation_step 실행
                 output = module.validation_step(batch, i, 0)

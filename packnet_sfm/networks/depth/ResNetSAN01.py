@@ -184,32 +184,42 @@ class ResNetSAN01(nn.Module):
 
     def forward(self, rgb, input_depth=None, **kwargs):
         """
-        🆕 Enhanced forward pass with improved LiDAR integration
+        🆕 Enhanced forward pass with proper RGB-only inference for self-supervised
         """
+        # 🔧 Self-supervised 모드에서는 inference 시 RGB만 사용
         if not self.training:
-            inv_depths, _ = self.run_network(rgb, input_depth)
+            # Inference: RGB-only depth estimation
+            inv_depths, _ = self.run_network(rgb, input_depth=None)  # Force None
             return {'inv_depths': inv_depths}
 
         output = {}
         
-        # RGB-only forward pass
+        # Training: RGB-only forward pass (primary)
         inv_depths_rgb, skip_feat_rgb = self.run_network(rgb)
         output['inv_depths'] = inv_depths_rgb
         
-        if input_depth is None:
-            return {'inv_depths': inv_depths_rgb}
-        
-        # RGB+D forward pass with enhanced processing
-        inv_depths_rgbd, skip_feat_rgbd = self.run_network(rgb, input_depth)
-        output['inv_depths_rgbd'] = inv_depths_rgbd
-        
-        # 🆕 Enhanced consistency loss with feature-level weighting
-        feature_weights = torch.softmax(torch.abs(self.weight), dim=0)
-        weighted_loss = sum([
-            weight * ((feat_rgbd.detach() - feat_rgb) ** 2).mean()
-            for weight, feat_rgbd, feat_rgb in zip(feature_weights, skip_feat_rgbd, skip_feat_rgb)
-        ]) / len(skip_feat_rgbd)
-        
-        output['depth_loss'] = weighted_loss
+        # 🆕 Training with LiDAR: Only for validation/consistency loss
+        if input_depth is not None:
+            # RGB+D forward pass for consistency loss only
+            inv_depths_rgbd, skip_feat_rgbd = self.run_network(rgb, input_depth)
+            output['inv_depths_rgbd'] = inv_depths_rgbd
+            
+            # Enhanced consistency loss with feature-level weighting
+            feature_weights = torch.softmax(torch.abs(self.weight), dim=0)
+            weighted_loss = sum([
+                weight * ((feat_rgbd.detach() - feat_rgb) ** 2).mean()
+                for weight, feat_rgbd, feat_rgb in zip(feature_weights, skip_feat_rgbd, skip_feat_rgb)
+            ]) / len(skip_feat_rgbd)
+            
+            output['depth_loss'] = weighted_loss
+            
+            # 🆕 Debug info for training
+            if hasattr(self, '_debug_counter'):
+                self._debug_counter += 1
+            else:
+                self._debug_counter = 1
+                
+            if self._debug_counter % 50 == 0:
+                print(f"🔧 [Step {self._debug_counter}] RGB+D consistency loss: {weighted_loss.item():.6f}")
         
         return output

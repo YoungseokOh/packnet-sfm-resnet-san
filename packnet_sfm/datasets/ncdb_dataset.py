@@ -9,6 +9,7 @@ from torch.utils.data import Dataset
 from torch.utils.data.dataloader import default_collate
 
 from packnet_sfm.datasets.transforms import get_transforms
+from packnet_sfm.datasets.augmentations import to_tensor # ✅ 추가
 from packnet_sfm.utils.image import load_image
 from packnet_sfm.geometry.camera import FisheyeCamera  # ✅ 추가
 
@@ -31,51 +32,33 @@ DEFAULT_LIDAR_TO_WORLD = np.array([
 
 class NcdbDataset(Dataset):
     """
-    NCDB Dataset for Semi-supervised Learning with FisheyeCamera support.
-    
-    Uses FisheyeCamera for accurate fisheye lens distortion modeling.
+    Simplified NCDB Dataset for fisheye self-supervised learning
     """
     
-    def __init__(self, dataset_root, split_file, transform=None, mask_file=None,
+    def __init__(self, dataset_root, split_file, transform=None, 
                  back_context=0, forward_context=0, strides=(1,), 
-                 with_context=False, with_depth=True, **kwargs):
+                 with_context=False, **kwargs):
         super().__init__()
         
         # Dataset paths
         self.dataset_root = Path(dataset_root)
         
-        # Context parameters (KITTI style)
+        # Context parameters
         self.backward_context = back_context
         self.forward_context = forward_context
         self.strides = strides
         self.with_context = with_context or (back_context > 0 or forward_context > 0)
-        self.with_depth = with_depth
-        
-        # Context path storage
-        self.backward_context_paths = []
-        self.forward_context_paths = []
-        
-        # Cache for file validation
-        self._file_cache = {}
-        self._folder_cache = {}
-        
-        # Load split file
-        self._load_split_file(split_file)
-        
-        # Load mask if provided
-        self.mask = None
-        if mask_file:
-            absolute_mask_path = self.dataset_root / mask_file
-            if absolute_mask_path.exists():
-                self.mask = (np.array(Image.open(absolute_mask_path).convert('L')) > 0).astype(np.uint8)
         
         # Transform
         self.transform = transform
         
-        # Filter paths with context if needed
+        # Load split file
+        self._load_split_file(split_file)
+        
+        # 🔧 KITTI 방식: Context가 필요한 경우 사전 필터링
         if self.with_context:
-            self._filter_paths_with_context()
-    
+            self._filter_valid_samples_with_context()
+        
     def _load_split_file(self, split_file):
         """Load and validate split file"""
         absolute_split_path = self.dataset_root / split_file
@@ -88,235 +71,351 @@ class NcdbDataset(Dataset):
         if not isinstance(mapping_data, list):
             raise ValueError("Split file must contain a list of entries")
         
-        self.data_entries = mapping_data
+        # Process entries
+        processed = []
+        for e in mapping_data:
+            if isinstance(e, dict):
+                if ('new_filename' not in e or not e.get('new_filename')) and e.get('image_path'):
+                    try:
+                        e['new_filename'] = Path(e['image_path']).stem
+                    except Exception:
+                        pass
+            processed.append(e)
+        
+        self.data_entries = processed
         print(f"Loaded {len(self.data_entries)} entries from {split_file}")
+
+    def _filter_valid_samples_with_context(self):
+        """KITTI 방식: Context가 유효한 샘플만 필터링"""
+        print(f"🔄 Filtering samples with valid context (backward={self.backward_context}, forward={self.forward_context})")
+        
+        valid_samples = []
+        skipped_count = 0
+        
+        for idx, entry in enumerate(self.data_entries):
+            # Context 유효성 검사
+            if self._validate_context_availability(entry):
+                valid_samples.append(entry)
+            else:
+                skipped_count += 1
+        
+        print(f"📊 Context filtering results:")
+        print(f"   Original samples: {len(self.data_entries)}")
+        print(f"   Valid samples: {len(valid_samples)}")
+        print(f"   Skipped samples: {skipped_count}")
+        
+        # 유효한 샘플만 유지
+        self.data_entries = valid_samples
     
-    def _filter_paths_with_context(self):
-        """Filter paths that have valid context frames (KITTI style)"""
-        print(f"Filtering for context (backward={self.backward_context}, forward={self.forward_context})")
+    def _validate_context_availability(self, entry):
+        """특정 entry에 대해 context 가용성 검증"""
+        stem = entry.get('new_filename')
+        if not stem and entry.get('image_path'):
+            stem = Path(entry['image_path']).stem
         
-        valid_entries = []
-        valid_backward_contexts = []
-        valid_forward_contexts = []
+        image_path = self._resolve_image_path(entry, stem)
+        dirp = image_path.parent
         
-        for stride in self.strides:
-            for idx, entry in enumerate(self.data_entries):
-                backward_context, forward_context = self._get_sample_context(
-                    idx, self.backward_context, self.forward_context, stride)
-                
-                if backward_context is not None:
-                    valid_entries.append(entry)
-                    valid_backward_contexts.append(backward_context)
-                    valid_forward_contexts.append(forward_context)
-        
-        self.data_entries = valid_entries
-        self.backward_context_paths = valid_backward_contexts
-        self.forward_context_paths = valid_forward_contexts
-        
-        print(f"After context filtering: {len(self.data_entries)} valid samples")
-    
-    def _get_sample_context(self, idx, backward_context, forward_context, stride=1):
-        """Get context frames for a sample (KITTI style)"""
-        max_idx = len(self.data_entries) - 1
-        
-        # Check bounds
-        if idx - backward_context * stride < 0 or idx + forward_context * stride > max_idx:
-            return None, None
-        
-        # Validate backward context
-        backward_context_files = []
-        for offset in range(-backward_context, 0):
-            context_idx = idx + offset * stride
-            if not self._check_sample_exists(context_idx):
-                return None, None
-            backward_context_files.append(context_idx)
-        
-        # Validate forward context
-        forward_context_files = []
-        for offset in range(1, forward_context + 1):
-            context_idx = idx + offset * stride
-            if not self._check_sample_exists(context_idx):
-                return None, None
-            forward_context_files.append(context_idx)
-        
-        return backward_context_files, forward_context_files
-    
-    def _check_sample_exists(self, idx):
-        """Check if sample files exist"""
-        if idx in self._file_cache:
-            return self._file_cache[idx]
-        
-        entry = self.data_entries[idx]
-        stem = entry['new_filename']
-        
-        # Check image file
-        image_path = self.dataset_root / entry['dataset_root'] / 'image_a6' / f"{stem}.png"
-        if not image_path.exists():
-            self._file_cache[idx] = False
+        try:
+            base_num = int(image_path.stem)
+        except ValueError:
             return False
         
-        # Check depth file if needed
-        if self.with_depth:
-            depth_path = self.dataset_root / entry['dataset_root'] / 'newest_depth_maps' / f"{stem}.png"
-            if not depth_path.exists():
-                self._file_cache[idx] = False
-                return False
+        # 필요한 context 개수 확인
+        required_backward = 0
+        required_forward = 0
         
-        self._file_cache[idx] = True
-        return True
-    
+        # Backward context 확인
+        for i in range(1, self.backward_context + 1):
+            prev_num = base_num - i
+            if prev_num >= 0:
+                prev_path = dirp / f"{prev_num:010d}.png"
+                if prev_path.exists():
+                    required_backward += 1
+        
+        # Forward context 확인
+        for i in range(1, self.forward_context + 1):
+            next_num = base_num + i
+            next_path = dirp / f"{next_num:010d}.png"
+            if next_path.exists():
+                required_forward += 1
+        
+        # 필요한 개수만큼 있는지 확인
+        has_sufficient_context = (
+            required_backward >= self.backward_context and
+            required_forward >= self.forward_context
+        )
+        
+        return has_sufficient_context
+
+    def _resolve_image_path(self, entry, stem=None):
+        """Resolve image path from entry"""
+        if 'image_path' in entry and entry['image_path']:
+            return Path(entry['image_path'])
+        if stem is None:
+            stem = entry.get('new_filename')
+        root = Path(entry.get('dataset_root', ''))
+        if not root.is_absolute():
+            root = self.dataset_root / root
+        return root / 'image_a6' / f"{stem}.png"
+
+    def _resolve_depth_path(self, entry, stem=None):
+        """Resolve depth path from entry (PNG depth map)"""
+        # Prefer explicit path if provided
+        if 'depth_path' in entry and entry['depth_path']:
+            return Path(entry['depth_path'])
+        # Infer from dataset_root and stem
+        if stem is None:
+            if entry.get('new_filename'):
+                stem = entry['new_filename']
+            elif entry.get('image_path'):
+                try:
+                    stem = Path(entry['image_path']).stem
+                except Exception:
+                    stem = None
+        root = Path(entry.get('dataset_root', ''))
+        if not root.is_absolute():
+            root = self.dataset_root / root
+        if stem is None:
+            return None
+        return root / 'newest_depth_maps' / f"{stem}.png"
+
+    def _get_context_frames(self, idx):
+        """Enhanced context frame discovery with proper validation (KITTI-style)"""
+        entry = self.data_entries[idx]
+        stem = entry.get('new_filename')
+        if not stem and entry.get('image_path'):
+            stem = Path(entry['image_path']).stem
+        
+        image_path = self._resolve_image_path(entry, stem)
+        dirp = image_path.parent
+        
+        try:
+            base_num = int(image_path.stem)
+        except ValueError:
+            # 🔧 실패 시 빈 리스트 대신 None 반환하여 명확한 처리
+            return None
+        
+        context_images = []
+        
+        # 🔧 KITTI 방식: 사전에 존재하는 파일들만 확인
+        available_frames = []
+        
+        # Find backward context
+        for i in range(1, self.backward_context + 1):
+            prev_num = base_num - i
+            if prev_num >= 0:
+                prev_path = dirp / f"{prev_num:010d}.png"
+                if prev_path.exists():
+                    available_frames.append(('backward', i, prev_path))
+        
+        # Find forward context  
+        for i in range(1, self.forward_context + 1):
+            next_num = base_num + i
+            next_path = dirp / f"{next_num:010d}.png"
+            if next_path.exists():
+                available_frames.append(('forward', i, next_path))
+        
+        # 🔧 필수 context가 부족한 경우 None 반환
+        required_contexts = self.backward_context + self.forward_context
+        if len(available_frames) < required_contexts:
+            return None
+        
+        # 🔧 정확한 순서로 context 이미지 로드 (backward -> forward)
+        backward_images = []
+        forward_images = []
+        
+        for direction, offset, path in available_frames:
+            try:
+                img = load_image(str(path))
+                if direction == 'backward':
+                    backward_images.append((offset, img))
+                else:
+                    forward_images.append((offset, img))
+            except Exception as e:
+                # 🔧 로딩 실패 시 None 반환
+                print(f"⚠️ Failed to load context image {path}: {e}")
+                return None
+        
+        # 🔧 정렬하여 올바른 순서 보장
+        backward_images.sort(key=lambda x: -x[0])  # 역순 정렬 (가까운 것부터)
+        forward_images.sort(key=lambda x: x[0])    # 정순 정렬
+        
+        # 최종 context list 구성
+        for _, img in backward_images:
+            context_images.append(img)
+        for _, img in forward_images:
+            context_images.append(img)
+        
+        return context_images
+
     def __len__(self):
         return len(self.data_entries)
     
     def __getitem__(self, idx):
         entry = self.data_entries[idx]
-        stem = entry['new_filename']
-        
-        # Construct paths
-        image_path = self.dataset_root / entry['dataset_root'] / 'image_a6' / f"{stem}.png"
-        depth_path = self.dataset_root / entry['dataset_root'] / 'newest_depth_maps' / f"{stem}.png"
+        stem = entry.get('new_filename')
+        if not stem and entry.get('image_path'):
+            stem = Path(entry['image_path']).stem
         
         # Load image
+        image_path = self._resolve_image_path(entry, stem)
         image = load_image(str(image_path))
         W, H = image.size
         
-        # Load depth if needed (안전하게 체크)
+        # Load depth (16-bit PNG -> float32). If missing, fallback to zeros to avoid KeyError
         depth_gt = None
-        if hasattr(self, 'with_depth') and self.with_depth:
+        depth_path = self._resolve_depth_path(entry, stem)
+        if depth_path and depth_path.exists():
             try:
-                depth_png = Image.open(depth_path)
-                depth_gt_png = np.asarray(depth_png, dtype=np.uint16)
-                depth_gt = depth_gt_png.astype(np.float32)
-            except (FileNotFoundError, OSError) as e:
-                print(f"Warning: Could not load depth file {depth_path}: {e}")
+                # Load 16-bit PNG depth map
+                depth_img = Image.open(str(depth_path))
+                depth_array = np.array(depth_img, dtype=np.float32)
+                # Convert to meters (assuming depth is in mm)
+                depth_array = depth_array / 1000.0
+                depth_gt = depth_array
+            except Exception as e:
+                print(f"⚠️ Failed to load depth {depth_path}: {e}")
                 depth_gt = None
         
-        # Calibration data
-        calib_data = DEFAULT_CALIB_A6.copy()
-        calib_data['image_size'] = (H, W)
+        # 🔧 Ensure depth is never None for tensor conversion
+        if depth_gt is None:
+            # Create dummy depth map with zeros
+            depth_gt = np.zeros((H, W), dtype=np.float32)
         
-        # Process intrinsics for FisheyeCamera
-        intrinsics_list = torch.tensor(calib_data['intrinsic'], dtype=torch.float32)
-        distortion_coeffs = {
-            'k': torch.tensor(calib_data['intrinsic'][0:7], dtype=torch.float32),
-            's': torch.tensor(calib_data['intrinsic'][7], dtype=torch.float32),
-            'div': torch.tensor(calib_data['intrinsic'][8], dtype=torch.float32),
-            'ux': torch.tensor(calib_data['intrinsic'][9], dtype=torch.float32),
-            'uy': torch.tensor(calib_data['intrinsic'][10], dtype=torch.float32),
-            'image_size': (H, W)
+        # 🔧 Camera and distortion coefficients 설정 (모든 필수 키 포함)
+        calib = DEFAULT_CALIB_A6.copy()
+        calib['image_size'] = (H, W)
+        
+        # Extract all required parameters for FisheyeCamera
+        intrinsic_vals = calib['intrinsic']
+        k_coeffs = torch.tensor(intrinsic_vals[:7], dtype=torch.float32)  # k0~k6
+        
+        # VADAS 모델에서 추가 파라미터들 (intrinsic[7:] 사용)
+        s_val = torch.tensor(intrinsic_vals[7], dtype=torch.float32)      # scale factor
+        div_val = torch.tensor(intrinsic_vals[8], dtype=torch.float32)    # division factor
+        ux_val = torch.tensor(W / 2.0, dtype=torch.float32)              # principal point x
+        uy_val = torch.tensor(H / 2.0, dtype=torch.float32)              # principal point y
+        
+        # FisheyeCamera가 기대하는 완전한 형식
+        fisheye_intrinsics = {
+            'k': k_coeffs,
+            's': s_val,
+            'div': div_val,
+            'ux': ux_val,
+            'uy': uy_val
         }
         
-        # ✅ FisheyeCamera 객체 생성
-        camera = FisheyeCamera(
-            intrinsics=distortion_coeffs,
-            image_size=(H, W)
-        )
+        # Create FisheyeCamera object with complete intrinsics
+        camera = FisheyeCamera(intrinsics=fisheye_intrinsics, image_size=(H, W))
         
-        # Extrinsic and LiDAR data
-        extrinsic_matrix = torch.tensor(calib_data['extrinsic'], dtype=torch.float32)
-        lidar_to_world_matrix = torch.tensor(DEFAULT_LIDAR_TO_WORLD, dtype=torch.float32)
+        # Distortion coefficients for loss function (simplified)
+        distortion_coeffs = {'k': k_coeffs}
         
-        # Apply mask if available
-        if self.mask is not None:
-            if self.mask.shape[:2] != (H, W):
-                mask_img = Image.fromarray((self.mask * 255).astype(np.uint8), mode='L')
-                mask_img = mask_img.resize((W, H), Image.NEAREST)
-                self.mask = np.array(mask_img)
-            
-            image_np = np.array(image)
-            image_np = (image_np * self.mask[:, :, np.newaxis]).astype(image_np.dtype)
-            image = Image.fromarray(image_np)
-            
-            if depth_gt is not None:
-                depth_gt = depth_gt * self.mask
+        # Create intrinsics matrix for compatibility
+        fx = fy = 1.0  # Normalized for fisheye
+        cx, cy = W / 2.0, H / 2.0
+        intrinsics_list = np.array([
+            [fx, 0., cx],
+            [0., fy, cy],
+            [0., 0., 1.]
+        ], dtype=np.float32)
         
         # Build sample
         sample = {
             'rgb': image,
             'idx': idx,
-            'camera': camera,  # ✅ FisheyeCamera 객체 추가
+            'camera': camera,
             'intrinsics': intrinsics_list,
-            'distortion_coeffs': distortion_coeffs,
-            'extrinsic': extrinsic_matrix,
-            'lidar_to_world': lidar_to_world_matrix,
+            'distortion_coeffs': {
+                'k': k_coeffs,
+                's': s_val,
+                'div': div_val,
+                'ux': ux_val,
+                'uy': uy_val,
+            },
             'filename': stem,
-            'meta': {
-                'image_path': str(image_path),
-                'depth_path': str(depth_path) if hasattr(self, 'with_depth') and self.with_depth else None,
-                'calibration_source': 'hardcoded_default',
-            }
+            'depth': depth_gt,  # ✅ ensure depth is always present
         }
         
-        # Add depth (안전하게 체크)
-        if depth_gt is not None:
-            sample['depth'] = depth_gt
-        
-        # Add mask
-        if self.mask is not None:
-            sample['mask'] = self.mask
-        
-        # Add context frames with FisheyeCamera
-        if hasattr(self, 'with_context') and self.with_context and idx < len(self.backward_context_paths):
-            context_images = []
-            context_cameras = []  # ✅ Context 카메라들도 FisheyeCamera
-            
-            # Load backward context
-            for context_idx in self.backward_context_paths[idx]:
-                context_entry = self.data_entries[context_idx]
-                context_stem = context_entry['new_filename']
-                context_image_path = self.dataset_root / context_entry['dataset_root'] / 'image_a6' / f"{context_stem}.png"
-                
-                if context_image_path.exists():
-                    context_image = load_image(str(context_image_path))
-                    context_images.append(context_image)
-                    
-                    # ✅ 각 context 프레임도 FisheyeCamera 생성
-                    context_camera = FisheyeCamera(
-                        intrinsics=distortion_coeffs,  # 동일한 캘리브레이션 사용
-                        image_size=(H, W)
-                    )
-                    context_cameras.append(context_camera)
-            
-            # Load forward context
-            for context_idx in self.forward_context_paths[idx]:
-                context_entry = self.data_entries[context_idx]
-                context_stem = context_entry['new_filename']
-                context_image_path = self.dataset_root / context_entry['dataset_root'] / 'image_a6' / f"{context_stem}.png"
-                
-                if context_image_path.exists():
-                    context_image = load_image(str(context_image_path))
-                    context_images.append(context_image)
-                    
-                    # ✅ 각 context 프레임도 FisheyeCamera 생성
-                    context_camera = FisheyeCamera(
-                        intrinsics=distortion_coeffs,  # 동일한 캘리브레이션 사용
-                        image_size=(H, W)
-                    )
-                    context_cameras.append(context_camera)
-            
-            if context_images:
+        # Add context frames if needed
+        if self.with_context:
+            # 🔧 사전 필터링으로 인해 모든 샘플이 유효한 context를 가짐이 보장됨
+            context_images = self._get_context_frames(idx)
+            # 하지만 방어적 코딩으로 여전히 체크
+            if context_images is not None and len(context_images) > 0:
                 sample['rgb_context'] = context_images
-                sample['camera_context'] = context_cameras  # ✅ Context 카메라들 추가
+                # Create context cameras with same intrinsics
+                sample['camera_context'] = [
+                    FisheyeCamera(intrinsics=fisheye_intrinsics, image_size=(H, W))
+                    for _ in context_images
+                ]
+                # Generate dummy poses for context frames
+                sample['pose_context'] = self._generate_dummy_poses(len(context_images))
+            else:
+                # 🚨 이 경우는 사전 필터링 후에는 발생하면 안됨
+                print(f"⚠️ WARNING: Sample {idx} passed filtering but has no valid context!")
+                sample['rgb_context'] = []
+                sample['camera_context'] = []
+                sample['pose_context'] = []
+        else:
+            sample['rgb_context'] = []
+            sample['camera_context'] = []
+            sample['pose_context'] = []
+        
+        sample['has_context'] = len(sample['rgb_context']) > 0
         
         # Apply transforms
         if self.transform:
             sample = self.transform(sample)
-        
+
         return sample
 
-    # ✅ 커스텀 collate_fn 추가: FisheyeCamera를 처리
+    def _generate_dummy_poses(self, num_contexts):
+        """Generate dummy pose context for self-supervised learning
+        
+        Parameters
+        ----------
+        num_contexts : int
+            Number of context frames
+            
+        Returns
+        -------
+        poses : list
+            List of 4x4 transformation matrices (dummy poses)
+        """
+        poses = []
+        for i in range(num_contexts):
+            # Create identity transformation matrix as dummy pose
+            # In real scenarios, this would be actual camera poses between frames
+            pose_matrix = np.eye(4, dtype=np.float32)
+            
+            # Add small random perturbation to make it non-identity
+            # This gives PoseNet something to learn from
+            angle = np.random.uniform(-0.1, 0.1)  # Small rotation
+            translation = np.random.uniform(-0.01, 0.01, 3)  # Small translation
+            
+            # Simple rotation around Y axis (typical for vehicle motion)
+            cos_a, sin_a = np.cos(angle), np.sin(angle)
+            pose_matrix[0, 0] = cos_a
+            pose_matrix[0, 2] = sin_a
+            pose_matrix[2, 0] = -sin_a
+            pose_matrix[2, 2] = cos_a
+            
+            # Add translation
+            pose_matrix[:3, 3] = translation
+            
+            poses.append(pose_matrix)
+        
+        return poses
+
+    # Custom collate function (simplified)
     @staticmethod
     def custom_collate_fn(batch):
-        """
-        커스텀 collate 함수: FisheyeCamera 객체를 처리.
-        - 배치는 딕셔너리 리스트 형태 (예: [{'rgb': ..., 'camera': FisheyeCamera, ...}]).
-        - 'camera'와 'camera_context'는 리스트로 묶음.
-        - 다른 키는 default_collate 사용.
-        """
+        """Simplified collate function for FisheyeCamera objects"""
         if not batch:
             return {}
         
-        # 첫 번째 아이템의 키를 기준으로 처리
         keys = batch[0].keys()
         collated = {}
         
@@ -324,14 +423,44 @@ class NcdbDataset(Dataset):
             values = [item[key] for item in batch if key in item]
             
             if key in ['camera', 'camera_context']:
-                # FisheyeCamera 객체는 리스트로 묶음
+                # Keep camera objects as lists
                 collated[key] = values
+            elif key == 'distortion_coeffs':
+                # Stack distortion coefficients
+                stacked = {}
+                sample_keys = list(values[0].keys())
+                for k in sample_keys:
+                    vals = [d[k] for d in values]
+                    if isinstance(vals[0], torch.Tensor):
+                        try:
+                            # Ensure scalars are unsqueezed
+                            proc = []
+                            for v in vals:
+                                if v.dim() == 0:
+                                    v = v.unsqueeze(0)
+                                proc.append(v)
+                            stacked[k] = torch.stack(proc, dim=0)
+                        except Exception:
+                            stacked[k] = vals
+                    else:
+                        stacked[k] = vals
+                collated[key] = stacked
+            elif key == 'depth':
+                # Collate depth and add channel dimension
+                collated[key] = default_collate(values).unsqueeze(1)
+            elif key == 'rgb':
+                # Stack Tensors
+                collated[key] = torch.stack(values)
+            elif key == 'rgb_context':
+                if values and isinstance(values[0], list):
+                    transposed_context_frames = zip(*values)
+                    collated[key] = [torch.stack(ctx_frames) for ctx_frames in transposed_context_frames]
+                else:
+                    collated[key] = torch.stack(values)
             else:
-                # 다른 데이터는 default_collate 사용
                 try:
                     collated[key] = default_collate(values)
-                except TypeError:
-                    # 실패 시 리스트로 유지
+                except Exception:
                     collated[key] = values
         
         return collated

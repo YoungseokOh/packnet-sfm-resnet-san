@@ -9,6 +9,7 @@ import torch
 import os
 from collections import OrderedDict
 from torch.utils.data import ConcatDataset, DataLoader, Subset
+import torch.nn.functional as F
 
 from packnet_sfm.datasets.transforms import get_transforms
 from packnet_sfm.utils.depth import inv2depth, post_process_inv_depth, compute_depth_metrics, viz_inv_depth
@@ -262,21 +263,43 @@ class ModelWrapper(torch.nn.Module):
         """
         Processes a training batch.
         """
-        model_output = self.model(batch, progress=self.progress, masks=batch.get('mask', None)) # masks 인자 추가
+        # Forward pass: mask is already inside batch and SelfSupModel.forward reads batch['mask'] internally.
+        model_output = self.model(batch, progress=self.progress)  # removed unsupported masks kwarg
 
         if self.loggers and batch_idx % self.config.tensorboard.log_frequency == 0:
             rgb_original = batch['rgb_original'][0].cpu()  # (C, H, W)
             viz_pred_inv_depth = viz_inv_depth(model_output['inv_depths'][0][0])
             if isinstance(viz_pred_inv_depth, np.ndarray):
                 viz_pred_inv_depth = torch.from_numpy(viz_pred_inv_depth).float()
-            viz_pred_inv_depth = viz_pred_inv_depth.permute(2, 0, 1)
+            viz_pred_inv_depth = viz_pred_inv_depth.permute(2, 0, 1).cpu()
+
+            # Helper to prepare mask
+            def _prepare_mask(mask_tensor, th, tw):
+                if mask_tensor is None:
+                    return None
+                m = mask_tensor
+                if isinstance(m, torch.Tensor):
+                    m = m.detach()
+                if m.dim() == 4:  # B,1,H,W
+                    m = m[0]
+                if m.dim() == 3:  # 1,H,W or C,H,W
+                    if m.size(0) == 1:
+                        m = m.squeeze(0)
+                    else:
+                        m = m[0]
+                if m.dim() != 2:
+                    return None
+                if m.shape[-2:] != (viz_pred_inv_depth.shape[1], viz_pred_inv_depth.shape[2]):
+                    m = F.interpolate(m.unsqueeze(0).unsqueeze(0).float(), size=(viz_pred_inv_depth.shape[1], viz_pred_inv_depth.shape[2]), mode='nearest').squeeze()
+                return m.cpu()  # Ensure CPU for safe multiplication with viz tensor
 
             mask = None
             if 'mask' in batch and batch['mask'] is not None:
-                mask = batch['mask'][0].cpu()
-                if mask.dim() == 3 and mask.shape[0] == 1:
-                    mask = mask.squeeze(0)
-                viz_pred_inv_depth_masked = viz_pred_inv_depth * mask.unsqueeze(0).float()
+                mask = _prepare_mask(batch['mask'], viz_pred_inv_depth.shape[1], viz_pred_inv_depth.shape[2])
+                if mask is not None:
+                    viz_pred_inv_depth_masked = viz_pred_inv_depth * mask.unsqueeze(0).float()
+                else:
+                    viz_pred_inv_depth_masked = viz_pred_inv_depth
             else:
                 viz_pred_inv_depth_masked = viz_pred_inv_depth
 
@@ -312,14 +335,34 @@ class ModelWrapper(torch.nn.Module):
             viz_pred_inv_depth = viz_inv_depth(output['inv_depth'][0])
             if isinstance(viz_pred_inv_depth, np.ndarray):
                 viz_pred_inv_depth = torch.from_numpy(viz_pred_inv_depth).float()
-            viz_pred_inv_depth = viz_pred_inv_depth.permute(2, 0, 1)
+            viz_pred_inv_depth = viz_pred_inv_depth.permute(2, 0, 1).cpu()
+
+            def _prepare_mask(mask_tensor, th, tw):
+                if mask_tensor is None:
+                    return None
+                m = mask_tensor
+                if isinstance(m, torch.Tensor):
+                    m = m.detach()
+                if m.dim() == 4:
+                    m = m[0]
+                if m.dim() == 3:
+                    if m.size(0) == 1:
+                        m = m.squeeze(0)
+                    else:
+                        m = m[0]
+                if m.dim() != 2:
+                    return None
+                if m.shape[-2:] != (viz_pred_inv_depth.shape[1], viz_pred_inv_depth.shape[2]):
+                    m = F.interpolate(m.unsqueeze(0).unsqueeze(0).float(), size=(viz_pred_inv_depth.shape[1], viz_pred_inv_depth.shape[2]), mode='nearest').squeeze()
+                return m.cpu()
 
             mask = None
             if 'mask' in batch and batch['mask'] is not None:
-                mask = batch['mask'][0].cpu()
-                if mask.dim() == 3 and mask.shape[0] == 1:
-                    mask = mask.squeeze(0)
-                viz_pred_inv_depth_masked = viz_pred_inv_depth * mask.unsqueeze(0).float()
+                mask = _prepare_mask(batch['mask'], viz_pred_inv_depth.shape[1], viz_pred_inv_depth.shape[2])
+                if mask is not None:
+                    viz_pred_inv_depth_masked = viz_pred_inv_depth * mask.unsqueeze(0).float()
+                else:
+                    viz_pred_inv_depth_masked = viz_pred_inv_depth
             else:
                 viz_pred_inv_depth_masked = viz_pred_inv_depth
 
@@ -862,12 +905,28 @@ def setup_dataset(config, mode, requirements, **kwargs):
         # ncdb dataset
         elif config.dataset[i] == 'ncdb':
             from packnet_sfm.datasets.ncdb_dataset import NcdbDataset
+            
+            # 🎯 Simplified NcdbDataset arguments
+            ncdb_args = {
+                'transform': dataset_args.get('data_transform', None),
+                'back_context': config.back_context,
+                'forward_context': config.forward_context,
+                'strides': getattr(config, 'strides', (1,)),
+                'with_context': (config.back_context > 0 or config.forward_context > 0),
+            }
+            
             dataset = NcdbDataset(
-                config.path[i], 
+                config.path[i],
                 config.split[i],
-                transform=dataset_args.get('data_transform', None),
-                mask_file=getattr(config, "mask_file", [None])[i]
+                **ncdb_args
             )
+            if mode == 'train':
+                try:
+                    sample0 = dataset[0]
+                    ctx_len = len(sample0.get('rgb_context', []))
+                    print0(pcolor(f"[NcdbDataset] back={config.back_context} fwd={config.forward_context} ctx_len={ctx_len}", 'cyan'))
+                except Exception as e:
+                    print0(pcolor(f"[NcdbDataset] failed to fetch sample0: {e}", 'red'))
         # DGP dataset
         elif config.dataset[i] == 'DGP':
             from packnet_sfm.datasets.dgp_dataset import DGPDataset
@@ -941,7 +1000,7 @@ def setup_dataloader(datasets, config, mode):
             for sub in ds.datasets:
                 yield from _iter_children(sub)
         elif isinstance(ds, Subset):
-            yield from _iter_children(ds.dataset)
+            yield from _iter_children(sub.dataset)
         else:
             yield ds
 

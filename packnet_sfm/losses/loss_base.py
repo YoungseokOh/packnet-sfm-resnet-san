@@ -2,6 +2,7 @@
 
 import numpy as np
 import torch.nn as nn
+import torch
 from packnet_sfm.utils.types import is_list
 
 ########################################################################################################################
@@ -70,7 +71,9 @@ class LossBase(nn.Module):
         return self._metrics
 
     def add_metric(self, key, val):
-        """Add a new metric to the dictionary and detach it."""
+        """Add a new metric to the dictionary and detach it. Accepts Python scalars."""
+        if not hasattr(val, 'detach'):
+            val = torch.as_tensor(val)
         self._metrics[key] = val.detach()
 
 ########################################################################################################################

@@ -25,6 +25,20 @@ def load_image(path):
     """
     return Image.open(path)
 
+def load_depth(path):
+    """
+    Read a depth map using PIL
+    Parameters
+    ----------
+    path : str
+        Path to the depth map
+    Returns
+    -------
+    depth : PIL.Image
+        Loaded depth map (converted to 'F' for float)
+    """
+    return Image.open(path).convert('F')
+
 
 def write_image(filename, image):
     """
