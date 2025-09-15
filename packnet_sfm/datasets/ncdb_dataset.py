@@ -32,10 +32,22 @@ DEFAULT_LIDAR_TO_WORLD = np.array([
 class NcdbDataset(Dataset):
     """
     NCDB Dataset for Semi-supervised Learning with FisheyeCamera support.
-    
-    Uses FisheyeCamera for accurate fisheye lens distortion modeling.
     """
     
+    # ✅ 공통 PNG 로더: 항상 (미터*256) 규약이면 /256 복원 (default)
+    def _load_depth_png(self, depth_path: Path):
+        try:
+            depth_png = Image.open(depth_path)
+            arr16 = np.asarray(depth_png, dtype=np.uint16)
+            depth = arr16.astype(np.float32)
+            # (raw 값이 255 초과하면 KITTI 스타일(미터*256)로 간주하고 복원)
+            if depth.max() > 255:
+                depth /= 256.0
+            return depth
+        except (FileNotFoundError, OSError) as e:
+            print(f"[NcdbDataset] Depth load failed: {depth_path} ({e})")
+            return None
+
     def __init__(self, dataset_root, split_file, transform=None, mask_file=None,
                  back_context=0, forward_context=0, strides=(1,), 
                  with_context=False, with_depth=True, **kwargs):
@@ -157,7 +169,8 @@ class NcdbDataset(Dataset):
         
         # Check depth file if needed
         if self.with_depth:
-            depth_path = self.dataset_root / entry['dataset_root'] / 'newest_depth_maps' / f"{stem}.png"
+            # ✅ 현재 __getitem__에서 사용하는 폴더와 동일하게 맞춤
+            depth_path = self.dataset_root / entry['dataset_root'] / 'newest_synthetic_depth_maps' / f"{stem}.png"
             if not depth_path.exists():
                 self._file_cache[idx] = False
                 return False
@@ -174,23 +187,57 @@ class NcdbDataset(Dataset):
         
         # Construct paths
         image_path = self.dataset_root / entry['dataset_root'] / 'image_a6' / f"{stem}.png"
-        depth_path = self.dataset_root / entry['dataset_root'] / 'newest_depth_maps' / f"{stem}.png"
+        
+        # Depth Maps - Synthetic data
+        depth_path = self.dataset_root / entry['dataset_root'] / 'newest_synthetic_depth_maps' / f"{stem}.png"
+        
+        # Depth Maps - newest data
+        # depth_path = self.dataset_root / entry['dataset_root'] / 'newest_depth_maps' / f"{stem}.png"
+
+        # Depth Maps - new(pcd wrong) data
+        # depth_path = self.dataset_root / entry['dataset_root'] / 'new_depth_maps' / f"{stem}.png"
+        
+        # Depth Maps - original pcd data
+        # depth_path = self.dataset_root / entry['dataset_root'] / 'depth_maps' / f"{stem}.png"
         
         # Load image
         image = load_image(str(image_path))
         W, H = image.size
-        
-        # Load depth if needed (안전하게 체크)
+
         depth_gt = None
-        if hasattr(self, 'with_depth') and self.with_depth:
-            try:
-                depth_png = Image.open(depth_path)
-                depth_gt_png = np.asarray(depth_png, dtype=np.uint16)
-                depth_gt = depth_gt_png.astype(np.float32)
-            except (FileNotFoundError, OSError) as e:
-                print(f"Warning: Could not load depth file {depth_path}: {e}")
-                depth_gt = None
-        
+        if self.with_depth:
+            depth_gt = self._load_depth_png(depth_path)
+
+        # (추가) Depth 통계 계산
+        depth_stats = None
+        if depth_gt is not None:
+            pos = depth_gt[depth_gt > 0]
+            if pos.size > 0:
+                depth_stats = {
+                    'min': float(depth_gt.min()),
+                    'max': float(depth_gt.max()),
+                    'p50': float(np.percentile(pos, 50)),
+                    'p90': float(np.percentile(pos, 90)),
+                    'p95': float(np.percentile(pos, 95)),
+                    'count_pos': int(pos.size),
+                    'count_all': int(depth_gt.size),
+                }
+                if os.environ.get('DEPTH_RANGE_DEBUG', '0') == '1':
+                    print(f"[DepthRange][{stem}] min={depth_stats['min']:.2f} "
+                          f"max={depth_stats['max']:.2f} p50={depth_stats['p50']:.2f} "
+                          f"p90={depth_stats['p90']:.2f} p95={depth_stats['p95']:.2f} "
+                          f"pos={depth_stats['count_pos']}/{depth_stats['count_all']}")
+            else:
+                depth_stats = {
+                    'min': float(depth_gt.min()),
+                    'max': float(depth_gt.max()),
+                    'p50': 0.0, 'p90': 0.0, 'p95': 0.0,
+                    'count_pos': 0,
+                    'count_all': int(depth_gt.size)
+                }
+                if os.environ.get('DEPTH_RANGE_DEBUG', '0') == '1':
+                    print(f"[DepthRange][{stem}] all zero/non-positive.")
+
         # Calibration data
         calib_data = DEFAULT_CALIB_A6.copy()
         calib_data['image_size'] = (H, W)
@@ -234,7 +281,7 @@ class NcdbDataset(Dataset):
         sample = {
             'rgb': image,
             'idx': idx,
-            'camera': camera,  # ✅ FisheyeCamera 객체 추가
+            'camera': camera,
             'intrinsics': intrinsics_list,
             'distortion_coeffs': distortion_coeffs,
             'extrinsic': extrinsic_matrix,
@@ -242,15 +289,15 @@ class NcdbDataset(Dataset):
             'filename': stem,
             'meta': {
                 'image_path': str(image_path),
-                'depth_path': str(depth_path) if hasattr(self, 'with_depth') and self.with_depth else None,
+                'depth_path': str(depth_path) if self.with_depth else None,
                 'calibration_source': 'hardcoded_default',
+                'depth_stats': depth_stats,   # (추가) 통계 저장
             }
         }
         
         # Add depth (안전하게 체크)
         if depth_gt is not None:
             sample['depth'] = depth_gt
-        
         # Add mask
         if self.mask is not None:
             sample['mask'] = self.mask

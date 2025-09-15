@@ -609,6 +609,39 @@ class ModelWrapper(torch.nn.Module):
         depth_pred_pp = _to_b1hw(depth_pp)
         depth_gt      = _to_b1hw(batch.get('depth', None))
 
+        # 🔧 임시 스케일 보정: 환경변수 FORCE_DEPTH_DIV256=1일 때 Pred 256으로 나눔
+        if os.environ.get('FORCE_DEPTH_DIV256', '0') == '1':
+            def _div256(x):
+                if x is None:
+                    return x
+                # 값이 이미 물리 단위(최대 < 200 등)면 중복 나눔 피함
+                if torch.is_tensor(x) and x.max() > 255:
+                    return x / 256.0
+                return x
+            depth_pred    = _div256(depth_pred)
+            depth_pred_pp = _div256(depth_pred_pp)
+
+        if os.environ.get('DEPTH_RANGE_DEBUG', '0') == '1' and depth_gt is not None:
+            try:
+                pos = depth_gt[depth_gt > 0]
+                dmin = float(depth_gt.min())
+                dmax = float(depth_gt.max())
+                if pos.numel() > 0:
+                    p50 = float(torch.quantile(pos, 0.5))
+                    p90 = float(torch.quantile(pos, 0.9))
+                    p95 = float(torch.quantile(pos, 0.95))
+                else:
+                    p50 = p90 = p95 = 0.0
+                # 기존 EvalDepthRange + DepthDebug 함께 출력
+                valid_count = (depth_gt > 0).sum().item()
+                total_count = depth_gt.numel()
+                print(f"[EvalDepthRange] (scaled) min={dmin:.2f} max={dmax:.2f} "
+                      f"p50={p50:.2f} p90={p90:.2f} p95={p95:.2f} "
+                      f"pos={pos.numel()}/{depth_gt.numel()} | "
+                      f"[DepthDebug valid>0 {valid_count}/{total_count}]")
+            except Exception as e:
+                print(f"[EvalDepthRange] failed: {e}")
+
         # Compute metrics (tensor of 7 values each)
         metrics = OrderedDict()
         if depth_gt is not None and depth_pred is not None:
