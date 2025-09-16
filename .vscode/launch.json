@@ -67,8 +67,8 @@
             "request": "launch",
 
             // 실행할 스크립트 파일을 하나만 주석 해제하세요:
-            // "program": "${workspaceFolder}/scripts/train.py",
-            "program": "${workspaceFolder}/scripts/eval.py",
+            "program": "${workspaceFolder}/scripts/train.py",
+            // "program": "${workspaceFolder}/scripts/eval.py",
             // "program": "${workspaceFolder}/scripts/evaluate_depth_maps.py",
             // "program": "${workspaceFolder}/scripts/create_depth_maps.py",
             // "program": "${file}",
@@ -78,19 +78,20 @@
                 "PYTHONPATH": "${workspaceFolder}",
                 "PYTHONWARNINGS": "ignore::UserWarning",
                 "DEPTH_RANGE_DEBUG": "0", // ✅ 추가
-                "FORCE_DEPTH_DIV256": "1"
+                "FORCE_DEPTH_DIV256": "1",
+                "NCDB_DEPTH_VARIANT": "newest_depth_maps", // NCDB 용
             },    
             "cwd": "${workspaceFolder}",
             // 필요에 따라 args 를 주석 해제/수정하세요:
 
             // Train
-            // "args": 
-            // [
-            //     // "configs/train_resnet_san_kitti.yaml"
-            //     "configs/train_resnet_san_ncdb.yaml"
-            //     // "configs/train_resnet_selfsup_ncdb.yaml"
-            //     // "configs/train_resnet_san_ncdb_w_respt.yaml"
-            // ],
+            "args": 
+            [
+                // "configs/train_resnet_san_kitti.yaml"
+                "configs/train_resnet_san_ncdb.yaml"
+                // "configs/train_resnet_selfsup_ncdb.yaml"
+                // "configs/train_resnet_san_ncdb_w_respt.yaml"
+            ],
 
         //     // Create Depth Maps
         //     // "args":
@@ -111,15 +112,16 @@
         //     // ],
 
         //     // eval.py
-            "args": 
-            [
-                "--checkpoint",
-                "checkpoints/resnetsan01_newest_test/default_config-train_resnet_san_ncdb-2025.09.05-09h40m21s/epoch=29_ncdb-cls-combined_val-loss=0.000.ckpt",
-                "--config", 
-                "configs/train_resnet_san_ncdb.yaml"
-            ],
+        //     "args": 
+        //     [
+        //         "--checkpoint",
+        //         "checkpoints/resnetsan01_newest_test/default_config-train_resnet_san_ncdb-2025.09.05-09h40m21s/epoch=29_ncdb-cls-combined_val-loss=0.000.ckpt",
+        //         "--config", 
+        //         "configs/train_resnet_san_ncdb.yaml"
+        //     ],
+        
+        
         },
-
 
 
 

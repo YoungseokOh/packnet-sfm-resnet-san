@@ -1,18 +1,18 @@
 model:
     name: 'SemiSupCompletionModel'
     loss:
-        supervised_method: 'sparse-silog'
+        supervised_method: 'sparse-ssi-silog'
         supervised_num_scales: 1
         supervised_loss_weight: 1.0
     optimizer:
         name: 'Adam'
         depth:
-            lr: 0.0002
+            lr: 0.0001
         pose:
-            lr: 0.0002
+            lr: 0.0001
     scheduler:
         name: 'StepLR'
-        step_size: 30
+        step_size: 25
         gamma: 0.5
     depth_net:
         name: 'ResNetSAN01'
@@ -54,16 +54,16 @@ arch:
     seed: 42
     clip_grad: 10.0
     max_epochs: 30 # Increased for longer training
-    eval_during_training: false
+    eval_during_training: true
     eval_progress_interval: 0.5
     eval_subset_size: 100
 
 checkpoint:
-    filepath: 'checkpoints/resnetsan01_newest_test/'
+    filepath: 'checkpoints/resnetsan01_newest_test_sparse-ssi-silog/'
     save_top_k: -1
 
 save:
-    folder: 'outputs/resnetsan01_newest_test/'
+    folder: 'outputs/resnetsan01_newest_test_sparse-ssi-silog/'
 
 tensorboard:
     dry_run: false

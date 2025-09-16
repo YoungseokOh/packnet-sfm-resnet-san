@@ -33,7 +33,13 @@ class NcdbDataset(Dataset):
     """
     NCDB Dataset for Semi-supervised Learning with FisheyeCamera support.
     """
-    
+    DEFAULT_DEPTH_VARIANTS = [
+        'newest_depth_maps',
+        'newest_synthetic_depth_maps',
+        'new_depth_maps',
+        'depth_maps',
+    ]
+
     # ✅ 공통 PNG 로더: 항상 (미터*256) 규약이면 /256 복원 (default)
     def _load_depth_png(self, depth_path: Path):
         try:
@@ -41,8 +47,8 @@ class NcdbDataset(Dataset):
             arr16 = np.asarray(depth_png, dtype=np.uint16)
             depth = arr16.astype(np.float32)
             # (raw 값이 255 초과하면 KITTI 스타일(미터*256)로 간주하고 복원)
-            if depth.max() > 255:
-                depth /= 256.0
+            # if depth.max() > 255:
+            #     depth /= 256.0
             return depth
         except (FileNotFoundError, OSError) as e:
             print(f"[NcdbDataset] Depth load failed: {depth_path} ({e})")
@@ -50,7 +56,10 @@ class NcdbDataset(Dataset):
 
     def __init__(self, dataset_root, split_file, transform=None, mask_file=None,
                  back_context=0, forward_context=0, strides=(1,), 
-                 with_context=False, with_depth=True, **kwargs):
+                 with_context=False, with_depth=True,
+                 depth_variants=None,    # str | list | None
+                 strict_depth=False,     # True면 어떤 variant도 없으면 예외
+                 **kwargs):
         super().__init__()
         
         # Dataset paths
@@ -62,6 +71,33 @@ class NcdbDataset(Dataset):
         self.strides = strides
         self.with_context = with_context or (back_context > 0 or forward_context > 0)
         self.with_depth = with_depth
+        # Depth variant 설정
+        env_variant = os.getenv('NCDB_DEPTH_VARIANT', '').strip()
+        if env_variant:
+            # 콤마 구분 다중 허용
+            depth_variants = [v.strip() for v in env_variant.split(',') if v.strip()]
+        if depth_variants is None:
+            self.depth_variants = self.DEFAULT_DEPTH_VARIANTS.copy()
+        elif isinstance(depth_variants, str):
+            self.depth_variants = [depth_variants]
+        else:
+            self.depth_variants = list(depth_variants)
+        if not self.depth_variants:
+            self.depth_variants = self.DEFAULT_DEPTH_VARIANTS.copy()
+        self.strict_depth = strict_depth
+        # 중복 제거 (앞쪽 우선순위 유지)
+        seen = set()
+        ordered = []
+        for v in self.depth_variants:
+            if v not in seen:
+                ordered.append(v)
+                seen.add(v)
+        self.depth_variants = ordered
+        if os.environ.get('DEPTH_VARIANT_DEBUG','0') == '1':
+            print(f"[NcdbDataset] Depth variants order: {self.depth_variants}")
+        
+        # (추가) 선택된 depth variant 목록 출력 (주석 번갈아가며 바꿀 필요 없이 확인용)
+        print(f"[NcdbDataset] Using depth variants (priority order): {self.depth_variants}")
         
         # Context path storage
         self.backward_context_paths = []
@@ -153,30 +189,37 @@ class NcdbDataset(Dataset):
         
         return backward_context_files, forward_context_files
     
+    def _resolve_depth_path(self, entry, stem):
+        """
+        variant 우선순위에 따라 존재하는 depth 경로 반환.
+        Returns (path, variant_name) or (None, None)
+        """
+        base = self.dataset_root / entry['dataset_root']
+        for variant in self.depth_variants:
+            p = base / variant / f"{stem}.png"
+            if p.exists():
+                return p, variant
+        return None, None
+    
     def _check_sample_exists(self, idx):
-        """Check if sample files exist"""
-        if idx in self._file_cache:
-            return self._file_cache[idx]
-        
-        entry = self.data_entries[idx]
-        stem = entry['new_filename']
-        
-        # Check image file
-        image_path = self.dataset_root / entry['dataset_root'] / 'image_a6' / f"{stem}.png"
-        if not image_path.exists():
-            self._file_cache[idx] = False
-            return False
-        
-        # Check depth file if needed
-        if self.with_depth:
-            # ✅ 현재 __getitem__에서 사용하는 폴더와 동일하게 맞춤
-            depth_path = self.dataset_root / entry['dataset_root'] / 'newest_synthetic_depth_maps' / f"{stem}.png"
-            if not depth_path.exists():
-                self._file_cache[idx] = False
-                return False
-        
-        self._file_cache[idx] = True
-        return True
+         """Check if sample files exist"""
+         if idx in self._file_cache:
+             return self._file_cache[idx]
+         entry = self.data_entries[idx]
+         stem = entry['new_filename']
+         image_path = self.dataset_root / entry['dataset_root'] / 'image_a6' / f"{stem}.png"
+         if not image_path.exists():
+             self._file_cache[idx] = False
+             return False
+         if self.with_depth:
+            depth_path, variant = self._resolve_depth_path(entry, stem)
+            if depth_path is None:
+                if self.strict_depth:
+                    self._file_cache[idx] = False
+                    return False
+                # strict가 아니면 depth 없이도 샘플 사용
+         self._file_cache[idx] = True
+         return True
     
     def __len__(self):
         return len(self.data_entries)
@@ -188,24 +231,19 @@ class NcdbDataset(Dataset):
         # Construct paths
         image_path = self.dataset_root / entry['dataset_root'] / 'image_a6' / f"{stem}.png"
         
-        # Depth Maps - Synthetic data
-        depth_path = self.dataset_root / entry['dataset_root'] / 'newest_synthetic_depth_maps' / f"{stem}.png"
-        
-        # Depth Maps - newest data
-        # depth_path = self.dataset_root / entry['dataset_root'] / 'newest_depth_maps' / f"{stem}.png"
-
-        # Depth Maps - new(pcd wrong) data
-        # depth_path = self.dataset_root / entry['dataset_root'] / 'new_depth_maps' / f"{stem}.png"
-        
-        # Depth Maps - original pcd data
-        # depth_path = self.dataset_root / entry['dataset_root'] / 'depth_maps' / f"{stem}.png"
+        depth_path = None
+        depth_variant = None
+        if self.with_depth:
+            depth_path, depth_variant = self._resolve_depth_path(entry, stem)
+            if depth_path is None and self.strict_depth:
+                raise FileNotFoundError(
+                    f"No depth file found for {stem} in variants {self.depth_variants}")
         
         # Load image
         image = load_image(str(image_path))
         W, H = image.size
-
         depth_gt = None
-        if self.with_depth:
+        if self.with_depth and depth_path is not None:
             depth_gt = self._load_depth_png(depth_path)
 
         # (추가) Depth 통계 계산
@@ -226,7 +264,8 @@ class NcdbDataset(Dataset):
                     print(f"[DepthRange][{stem}] min={depth_stats['min']:.2f} "
                           f"max={depth_stats['max']:.2f} p50={depth_stats['p50']:.2f} "
                           f"p90={depth_stats['p90']:.2f} p95={depth_stats['p95']:.2f} "
-                          f"pos={depth_stats['count_pos']}/{depth_stats['count_all']}")
+                          f"pos={depth_stats['count_pos']}/{depth_stats['count_all']} "
+                          f"variant={depth_variant}")
             else:
                 depth_stats = {
                     'min': float(depth_gt.min()),
@@ -289,7 +328,8 @@ class NcdbDataset(Dataset):
             'filename': stem,
             'meta': {
                 'image_path': str(image_path),
-                'depth_path': str(depth_path) if self.with_depth else None,
+                'depth_path': str(depth_path) if (self.with_depth and depth_path is not None) else None,
+                'depth_variant': depth_variant,
                 'calibration_source': 'hardcoded_default',
                 'depth_stats': depth_stats,   # (추가) 통계 저장
             }
