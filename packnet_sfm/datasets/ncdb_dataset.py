@@ -33,6 +33,9 @@ class NcdbDataset(Dataset):
     """
     NCDB Dataset for Semi-supervised Learning with FisheyeCamera support.
     """
+    # 🔔 해상도 감지 로그: 프로세스당 한 번만 출력
+    _RESOLUTION_LOG_SHOWN = False
+
     DEFAULT_DEPTH_VARIANTS = [
         'newest_depth_maps',
         'newest_synthetic_depth_maps',
@@ -46,9 +49,14 @@ class NcdbDataset(Dataset):
             depth_png = Image.open(depth_path)
             arr16 = np.asarray(depth_png, dtype=np.uint16)
             depth = arr16.astype(np.float32)
-            # (raw 값이 255 초과하면 KITTI 스타일(미터*256)로 간주하고 복원)
-            # if depth.max() > 255:
-            #     depth /= 256.0
+            
+            # 1. KITTI 스타일로 256으로 나누기
+            if depth.max() > 255:
+                depth /= 256.0
+            
+            # 2. 유효하지 않은 픽셀(값이 0이었던 부분)을 -1로 마스킹
+            depth[arr16 == 0] = 0
+            
             return depth
         except (FileNotFoundError, OSError) as e:
             print(f"[NcdbDataset] Depth load failed: {depth_path} ({e})")
@@ -59,12 +67,14 @@ class NcdbDataset(Dataset):
                  with_context=False, with_depth=True,
                  depth_variants=None,    # str | list | None
                  strict_depth=False,     # True면 어떤 variant도 없으면 예외
+                 use_mask: bool = False, # ← 추가: 마스크 사용 여부 (기본 미사용)
                  **kwargs):
         super().__init__()
         
         # Dataset paths
         self.dataset_root = Path(dataset_root)
-        
+        self.use_mask = bool(use_mask)
+
         # Context parameters (KITTI style)
         self.backward_context = back_context
         self.forward_context = forward_context
@@ -110,12 +120,13 @@ class NcdbDataset(Dataset):
         # Load split file
         self._load_split_file(split_file)
         
-        # Load mask if provided
+        # Load mask if provided (0/1 binary), but apply only when use_mask=True
         self.mask = None
         if mask_file:
             absolute_mask_path = self.dataset_root / mask_file
             if absolute_mask_path.exists():
                 self.mask = (np.array(Image.open(absolute_mask_path).convert('L')) > 0).astype(np.uint8)
+                print(f"[NcdbDataset] Loaded mask (0/1) shape={self.mask.shape} | use_mask={self.use_mask}")
         
         # Transform
         self.transform = transform
@@ -123,10 +134,16 @@ class NcdbDataset(Dataset):
         # Filter paths with context if needed
         if self.with_context:
             self._filter_paths_with_context()
+
+        # 🔔 메인 프로세스에서 한 번만 입력 해상도 로그
+        self._log_input_resolution_once()
     
     def _load_split_file(self, split_file):
         """Load and validate split file"""
         absolute_split_path = self.dataset_root / split_file
+        if Path(split_file).is_absolute():
+            absolute_split_path = Path(split_file)
+
         if not absolute_split_path.exists():
             raise FileNotFoundError(f"Split file not found: {absolute_split_path}")
         
@@ -136,8 +153,34 @@ class NcdbDataset(Dataset):
         if not isinstance(mapping_data, list):
             raise ValueError("Split file must contain a list of entries")
         
-        self.data_entries = mapping_data
-        print(f"Loaded {len(self.data_entries)} entries from {split_file}")
+        # 표준화: image_path만 있는 항목을 (dataset_root, new_filename)로 변환
+        normalized = []
+        converted = 0
+        for item in mapping_data:
+            if 'dataset_root' in item and 'new_filename' in item:
+                normalized.append({'dataset_root': item['dataset_root'],
+                                   'new_filename': item['new_filename']})
+                continue
+            if 'image_path' in item:
+                p = Path(item['image_path'])
+                stem = p.stem  # 파일 스템
+                base_dir = p.parent
+                if base_dir.name == 'image_a6':
+                    base_dir = base_dir.parent  # .../synced_data
+
+                # self.dataset_root 기준 상대경로로 만들기 시도
+                try:
+                    rel_base = str(base_dir.relative_to(self.dataset_root))
+                except Exception:
+                    # 루트 밖 절대 경로면 그대로 저장(절대 경로 우선)
+                    rel_base = str(base_dir)
+                normalized.append({'dataset_root': rel_base, 'new_filename': stem})
+                converted += 1
+                continue
+            raise ValueError(f"Split entry missing required keys: {list(item.keys())}")
+        
+        self.data_entries = normalized
+        print(f"Loaded {len(self.data_entries)} entries from {absolute_split_path} (converted {converted} from image_path)")
     
     def _filter_paths_with_context(self):
         """Filter paths that have valid context frames (KITTI style)"""
@@ -245,6 +288,19 @@ class NcdbDataset(Dataset):
         depth_gt = None
         if self.with_depth and depth_path is not None:
             depth_gt = self._load_depth_png(depth_path)
+            
+            # ★ 디버깅: 로드한 depth 값 확인 (1회)
+            if depth_gt is not None and not hasattr(self, '_depth_load_logged'):
+                self._depth_load_logged = True
+                print(f"\n[NcdbDataset.__getitem__] Loaded depth from _load_depth_png:")
+                print(f"  Path: {depth_path}")
+                print(f"  Max: {np.max(depth_gt):.2f}")
+                print(f"  Min: {np.min(depth_gt):.2f}")
+                print(f"  Shape: {depth_gt.shape}")
+                valid = depth_gt > 0
+                if valid.any():
+                    print(f"  Valid pixels: {valid.sum()} / {depth_gt.size}")
+                    print(f"  Valid range: [{depth_gt[valid].min():.2f}, {depth_gt[valid].max():.2f}]")
 
         # (추가) Depth 통계 계산
         depth_stats = None
@@ -276,6 +332,20 @@ class NcdbDataset(Dataset):
                 }
                 if os.environ.get('DEPTH_RANGE_DEBUG', '0') == '1':
                     print(f"[DepthRange][{stem}] all zero/non-positive.")
+
+        # (선택) Binary mask per-sample 생성 (RGB에는 적용하지 않음)
+        mask01 = None
+        if self.use_mask and (self.mask is not None):
+            if self.mask.shape[:2] != (H, W):
+                mask_img = Image.fromarray((self.mask * 255).astype(np.uint8), mode='L')
+                mask_img = mask_img.resize((W, H), Image.NEAREST)
+                mask01 = (np.array(mask_img) > 0).astype(np.uint8)
+            else:
+                mask01 = self.mask
+
+            # GT에만 마스크 적용 (0/1 곱)
+            if depth_gt is not None:
+                depth_gt = depth_gt * mask01
 
         # Calibration data
         calib_data = DEFAULT_CALIB_A6.copy()
@@ -314,7 +384,7 @@ class NcdbDataset(Dataset):
             image = Image.fromarray(image_np)
             
             if depth_gt is not None:
-                depth_gt = depth_gt * self.mask
+                depth_gt = depth_gt * self.mask  # ← 여기가 문제일 가능성
         
         # Build sample
         sample = {
@@ -331,63 +401,43 @@ class NcdbDataset(Dataset):
                 'depth_path': str(depth_path) if (self.with_depth and depth_path is not None) else None,
                 'depth_variant': depth_variant,
                 'calibration_source': 'hardcoded_default',
-                'depth_stats': depth_stats,   # (추가) 통계 저장
+                'depth_stats': depth_stats,
             }
         }
         
-        # Add depth (안전하게 체크)
+        # Add depth
         if depth_gt is not None:
             sample['depth'] = depth_gt
-        # Add mask
-        if self.mask is not None:
-            sample['mask'] = self.mask
-        
-        # Add context frames with FisheyeCamera
-        if hasattr(self, 'with_context') and self.with_context and idx < len(self.backward_context_paths):
-            context_images = []
-            context_cameras = []  # ✅ Context 카메라들도 FisheyeCamera
-            
-            # Load backward context
-            for context_idx in self.backward_context_paths[idx]:
-                context_entry = self.data_entries[context_idx]
-                context_stem = context_entry['new_filename']
-                context_image_path = self.dataset_root / context_entry['dataset_root'] / 'image_a6' / f"{context_stem}.png"
-                
-                if context_image_path.exists():
-                    context_image = load_image(str(context_image_path))
-                    context_images.append(context_image)
-                    
-                    # ✅ 각 context 프레임도 FisheyeCamera 생성
-                    context_camera = FisheyeCamera(
-                        intrinsics=distortion_coeffs,  # 동일한 캘리브레이션 사용
-                        image_size=(H, W)
-                    )
-                    context_cameras.append(context_camera)
-            
-            # Load forward context
-            for context_idx in self.forward_context_paths[idx]:
-                context_entry = self.data_entries[context_idx]
-                context_stem = context_entry['new_filename']
-                context_image_path = self.dataset_root / context_entry['dataset_root'] / 'image_a6' / f"{context_stem}.png"
-                
-                if context_image_path.exists():
-                    context_image = load_image(str(context_image_path))
-                    context_images.append(context_image)
-                    
-                    # ✅ 각 context 프레임도 FisheyeCamera 생성
-                    context_camera = FisheyeCamera(
-                        intrinsics=distortion_coeffs,  # 동일한 캘리브레이션 사용
-                        image_size=(H, W)
-                    )
-                    context_cameras.append(context_camera)
-            
-            if context_images:
-                sample['rgb_context'] = context_images
-                sample['camera_context'] = context_cameras  # ✅ Context 카메라들 추가
-        
+
+        # 필요 시 downstream에서 사용할 수 있도록 mask도 전달 (옵션)
+        if mask01 is not None:
+            sample['mask'] = mask01
+
         # Apply transforms
         if self.transform:
             sample = self.transform(sample)
+            
+            # ★ 디버깅: Transform 후 depth 확인
+            if 'depth' in sample and not hasattr(self, '_transform_depth_logged'):
+                self._transform_depth_logged = True
+                d = sample['depth']
+                print(f"\n[NcdbDataset.__getitem__] After transform:")
+                if isinstance(d, torch.Tensor):
+                    print(f"  Type: torch.Tensor")
+                    print(f"  Shape: {d.shape}")
+                    print(f"  Max: {d.max().item():.2f}")
+                    print(f"  Min: {d.min().item():.2f}")
+                    valid = d > 0
+                    if valid.any():
+                        print(f"  Valid range: [{d[valid].min().item():.2f}, {d[valid].max().item():.2f}]")
+                elif isinstance(d, np.ndarray):
+                    print(f"  Type: numpy.ndarray")
+                    print(f"  Shape: {d.shape}")
+                    print(f"  Max: {np.max(d):.2f}")
+                    print(f"  Min: {np.min(d):.2f}")
+                    valid = d > 0
+                    if valid.any():
+                        print(f"  Valid range: [{d[valid].min().item():.2f}, {d[valid].max().item():.2f}]")
         
         return sample
 
@@ -422,3 +472,27 @@ class NcdbDataset(Dataset):
                     collated[key] = values
         
         return collated
+    
+    def _log_input_resolution_once(self):
+        """첫 유효 샘플의 W×H를 한 번만 로그로 출력"""
+        if NcdbDataset._RESOLUTION_LOG_SHOWN:
+            return
+        # 첫 유효 엔트리 탐색
+        for entry in self.data_entries:
+            stem = entry.get('new_filename')
+            if not stem:
+                continue
+            img_path = self.dataset_root / entry['dataset_root'] / 'image_a6' / f"{stem}.png"
+            if not img_path.exists():
+                continue
+            try:
+                with Image.open(img_path) as im:
+                    W, H = im.size
+            except Exception:
+                continue
+            msg = f"[NcdbDataset] Detected input resolution {W}x{H} (W×H)"
+            if (W, H) == (640, 384):
+                msg += " — OK (expected 640x384)."
+            print(msg + " [once]")
+            NcdbDataset._RESOLUTION_LOG_SHOWN = True
+            break

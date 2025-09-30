@@ -1,6 +1,7 @@
 # Copyright 2020 Toyota Research Institute.  All rights reserved.
 
 import numpy as np
+import torch
 import torch.nn as nn
 from packnet_sfm.utils.types import is_list
 
@@ -71,6 +72,12 @@ class LossBase(nn.Module):
 
     def add_metric(self, key, val):
         """Add a new metric to the dictionary and detach it."""
-        self._metrics[key] = val.detach()
+        # Accept torch tensors or Python scalars; ensure tensor then detach
+        try:
+            v = val.detach() if hasattr(val, 'detach') else torch.tensor(val)
+        except Exception:
+            # Best effort fallback to float conversion
+            v = torch.tensor(float(val))
+        self._metrics[key] = v
 
 ########################################################################################################################

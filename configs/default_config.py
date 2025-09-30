@@ -168,6 +168,7 @@ cfg.datasets.train.cameras = [[]]                   # Training cameras (double l
 cfg.datasets.train.repeat = [1]                     # Number of times training dataset is repeated per epoch
 cfg.datasets.train.num_logs = 5                     # Number of training images to log
 cfg.datasets.train.mask_file = ['']
+cfg.datasets.train.use_mask = [False]  # ← list로 변경
 ########################################################################################################################
 ### DATASETS.VALIDATION
 ########################################################################################################################
@@ -184,6 +185,7 @@ cfg.datasets.validation.input_depth_type = ['']     # Validation input depth typ
 cfg.datasets.validation.cameras = [[]]              # Validation cameras (double list, one for each dataset)
 cfg.datasets.validation.num_logs = 5                # Number of validation images to log
 cfg.datasets.validation.mask_file = ['']
+cfg.datasets.validation.use_mask = [False]  # ← list로 변경
 ########################################################################################################################
 ### DATASETS.TEST
 ########################################################################################################################
@@ -200,6 +202,7 @@ cfg.datasets.test.input_depth_type = ['']           # Test input depth type
 cfg.datasets.test.cameras = [[]]                    # Test cameras (double list, one for each dataset)
 cfg.datasets.test.num_logs = 5                      # Number of test images to log
 cfg.datasets.test.mask_file = ['']
+cfg.datasets.test.use_mask = [False]  # ← list로 변경
 ########################################################################################################################
 ### CHECKPOINT
 ########################################################################################################################

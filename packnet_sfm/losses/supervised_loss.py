@@ -1,6 +1,7 @@
 # Copyright 2020 Toyota Research Institute.  All rights reserved.
 
 import torch
+import inspect
 import torch.nn as nn
 
 from packnet_sfm.utils.image import match_scales
@@ -75,7 +76,7 @@ class SilogLoss(nn.Module):
 
 ########################################################################################################################
 
-def get_loss_func(supervised_method):
+def get_loss_func(supervised_method, **kwargs):
     """Determines the supervised loss to be used, given the supervised method."""
     print(f"🔍 Loading loss function for: {supervised_method}")
     
@@ -85,6 +86,12 @@ def get_loss_func(supervised_method):
         return nn.MSELoss()
     elif supervised_method.endswith('berhu'):
         return BerHuLoss()
+    elif supervised_method.endswith('ssi-silog'):
+        # 🆕 클래스 기반 SSI-Silog 손실 (선택적으로 YAML min/max depth 전달)
+        return SSISilogLoss(
+            min_depth=kwargs.get('min_depth', None),
+            max_depth=kwargs.get('max_depth', None),
+        )
     elif supervised_method.endswith('silog'):
         return SilogLoss()
     elif supervised_method.endswith('abs_rel'):
@@ -97,9 +104,7 @@ def get_loss_func(supervised_method):
         return ProgressiveEnhancedSSILoss()
     elif supervised_method.endswith('ssi-trim'):
         return SSITrimLoss(trim=0.2, epsilon=1e-6)
-    elif supervised_method.endswith('ssi-silog'):
-        # 🆕 클래스 기반 SSI-Silog 손실
-        return SSISilogLoss()
+    
     else:
         raise ValueError('Unknown supervised loss {}'.format(supervised_method))
 
@@ -123,7 +128,8 @@ class SupervisedLoss(LossBase):
     def __init__(self, supervised_method='sparse-l1',
                  supervised_num_scales=4, progressive_scaling=0.0, **kwargs):
         super().__init__()
-        self.loss_func = get_loss_func(supervised_method)
+        # 보존: get_loss_func에 kwargs로 min_depth/max_depth 등을 넘겨 SSI-Silog에서 사용할 수 있게 함
+        self.loss_func = get_loss_func(supervised_method, **kwargs)
         self.supervised_method = supervised_method
         self.n = supervised_num_scales
         self.progressive_scaling = ProgressiveScaling(
@@ -186,18 +192,77 @@ class SupervisedLoss(LossBase):
                 pred_filled = inv_depths[i].masked_fill(~current_mask, eps)
                 gt_filled = gt_inv_depths[i].masked_fill(~current_mask, eps)
                 
-                # Enhanced or Progressive SSI Loss handling
-                if hasattr(self.loss_func, 'forward') and 'mask' in self.loss_func.forward.__code__.co_varnames:
-                    # Pass the combined mask to the loss function
-                    loss_i = self.loss_func(pred_filled, gt_filled, mask=current_mask, progress=getattr(self, '_progress', 0.0))
-                elif hasattr(self.loss_func, 'forward') and 'epoch' in self.loss_func.forward.__code__.co_varnames:
-                    loss_i = self.loss_func(pred_filled, gt_filled, mask=current_mask, epoch=getattr(self, '_epoch', 0))
-                else:
-                    # If loss function doesn't accept mask, use the already masked tensors
-                    if hasattr(self.loss_func, 'forward') and 'mask' in self.loss_func.forward.__code__.co_varnames:
-                         loss_i = self.loss_func(pred_filled, gt_filled, mask=current_mask) # Pass combined mask
-                    else:
-                         loss_i = self.loss_func(pred_filled, gt_filled)
+                # Build kwargs based on the loss forward signature
+                loss_kwargs = {}
+                if hasattr(self.loss_func, 'forward'):
+                    sig = inspect.signature(self.loss_func.forward)
+                    params = sig.parameters
+                    if 'mask' in params:
+                        loss_kwargs['mask'] = current_mask
+                    if 'progress' in params:
+                        loss_kwargs['progress'] = getattr(self, '_progress', 0.0)
+                    if 'epoch' in params:
+                        loss_kwargs['epoch'] = getattr(self, '_epoch', 0)
+                # Call with filtered kwargs only
+                loss_i = self.loss_func(pred_filled, gt_filled, **loss_kwargs)
+
+                # ===== Per-scale logging for analysis (especially sparse-ssi-silog) =====
+                try:
+                    # Per-scale loss value
+                    self.add_metric(f's{i}/loss', loss_i)
+                    # Valid pixel stats
+                    valid_px = int(current_mask.sum().item())
+                    total_px = int(current_mask.numel())
+                    self.add_metric(f's{i}/valid_px', valid_px)
+                    self.add_metric(f's{i}/valid_ratio', valid_px / max(1, total_px))
+                    # If underlying loss exposes metrics (e.g., SSISilogLoss), copy them with scale prefix
+                    if isinstance(self.loss_func, LossBase):
+                        for k, v in self.loss_func.metrics.items():
+                            self.add_metric(f's{i}/{k}', v)
+
+                    # Optional concise per-step console debug for scale 0
+                    import os as _os
+                    if i == 0 and (_os.environ.get('SSI_SILOG_LOG_EVERY', '0') == '1' or _os.environ.get('SSI_SILOG_LOG_ONCE', '0') == '1'):
+                        if _os.environ.get('SSI_SILOG_LOG_ONCE', '0') == '1':
+                            _os.environ['SSI_SILOG_LOG_ONCE'] = '0'
+                        # Pull a few key metrics if present
+                        m = self.loss_func.metrics if isinstance(self.loss_func, LossBase) else {}
+                        ssi_comp = m.get('ssi_component', None)
+                        silog_comp = m.get('silog_component', None)
+                        ssi_mean = m.get('ssi_mean', None)
+                        ssi_var = m.get('ssi_var', None)
+                        silog1 = m.get('silog1', None)
+                        silog2 = m.get('silog2', None)
+                        silog_var = m.get('silog_var', None)
+                        frac_pb = m.get('frac_pred_depth_below_min', None)
+                        frac_pa = m.get('frac_pred_depth_above_max', None)
+                        frac_gb = m.get('frac_gt_depth_below_min', None)
+                        frac_ga = m.get('frac_gt_depth_above_max', None)
+                        pred_min = m.get('pred_depth_min', None)
+                        pred_max = m.get('pred_depth_max', None)
+                        gt_min = m.get('gt_depth_min', None)
+                        gt_max = m.get('gt_depth_max', None)
+                        # Format helper
+                        def _f(x):
+                            try:
+                                return float(x.detach().item() if hasattr(x, 'detach') else x)
+                            except Exception:
+                                return None
+                        print("[SupervisedLoss s0]",
+                              f"loss={_f(loss_i):.6f}",
+                              f"ssi={_f(ssi_comp):.6f}" if ssi_comp is not None else "ssi=NA",
+                              f"silog={_f(silog_comp):.6f}" if silog_comp is not None else "silog=NA",
+                              f"ssi_mean={_f(ssi_mean):.4e}" if ssi_mean is not None else "",
+                              f"ssi_var={_f(ssi_var):.4e}" if ssi_var is not None else "",
+                              f"silog1={_f(silog1):.4e}" if silog1 is not None else "",
+                              f"silog2={_f(silog2):.4e}" if silog2 is not None else "",
+                              f"silog_var={_f(silog_var):.4e}" if silog_var is not None else "",
+                              f"pred[min={_f(pred_min):.4g} max={_f(pred_max):.4g}]" if pred_min is not None and pred_max is not None else "",
+                              f"gt[min={_f(gt_min):.4g} max={_f(gt_max):.4g}]" if gt_min is not None and gt_max is not None else "",
+                              f"out-of-range pred<={_f(frac_pb):.4f} pred>={_f(frac_pa):.4f} gt<={_f(frac_gb):.4f} gt>={_f(frac_ga):.4f}" if frac_pb is not None else "",
+                              )
+                except Exception:
+                    pass
 
                 total_loss += loss_i
 

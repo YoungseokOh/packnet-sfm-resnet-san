@@ -29,41 +29,43 @@ model:
         scale_output: 'top-center'
 
 datasets:
-    train:
-        batch_size: 4 # Reduced for larger image size
-        dataset: ['ncdb']
-        path: ['/workspace/data/ncdb-cls']
-        split: ['splits/combined_train.json']
-        repeat: [1]
-        mask_file: ['binary_mask.png']
-    validation:
-        batch_size: 1 # Reduced for larger image size
-        dataset: ['ncdb']
-        path: ['/workspace/data/ncdb-cls']
-        split: ['splits/combined_val.json']
-        mask_file: ['binary_mask.png']
-    test:
-        batch_size: 1 # Reduced for larger image size
-        dataset: ['ncdb']
-        path: ['/workspace/data/ncdb-cls']
-        split: ['splits/combined_test.json']
-        mask_file: ['binary_mask.png']
+  augmentation:
+    image_shape: [384, 640]
+  train:
+    dataset: ['ncdb']
+    path: ['/workspace/data/ncdb-cls-640x384']
+    split: ['splits/combined_train.json']
+    mask_file: ['binary_mask.png']
+    use_mask: [false]   # 또는 false (단일 값). 마스크 미적용
+  validation:
+    dataset: ['ncdb']
+    path: ['/workspace/data/ncdb-cls-640x384']
+    split: ['splits/combined_val.json']
+    mask_file: ['binary_mask.png']
+    use_mask: [false]
+  test:
+    dataset: ['ncdb']
+    path: ['/workspace/data/ncdb-cls-640x384']
+    split: ['splits/combined_test.json']
+    mask_file: ['binary_mask.png']
+    use_mask: [false]
 
 # 🆕 중간 평가 설정
 arch:
     seed: 42
+    validate_first: false
     clip_grad: 10.0
-    max_epochs: 50 # Increased for longer training
+    max_epochs: 30 # Increased for longer training
     eval_during_training: true
     eval_progress_interval: 0.5
     eval_subset_size: 25
 
 checkpoint:
-    filepath: 'checkpoints/resnetsan01_newest_test_fixed_method_0.3_100_SSS/'
+    filepath: 'checkpoints/resnetsan01_640x384_newest_test_fixed_method_0.3_100_silog_1.0/'
     save_top_k: -1
 
 save:
-    folder: 'outputs/resnetsan01_newest_test_fixed_method_0.3_100_SSS/'
+    folder: 'outputs/resnetsan01_640x384_newest_test_fixed_method_0.3_100_silog_1.0/'
 
 tensorboard:
     dry_run: false

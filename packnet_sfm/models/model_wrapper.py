@@ -561,6 +561,22 @@ class ModelWrapper(torch.nn.Module):
         """
         Evaluate batch to produce depth metrics.
         """
+        
+        # ★ 디버깅: batch['depth']가 들어올 때 값 확인
+        if 'depth' in batch and batch['depth'] is not None:
+            raw_depth = batch['depth']
+            if hasattr(raw_depth, 'max'):
+                max_val = float(raw_depth.max())
+                if not hasattr(self, '_batch_depth_logged'):
+                    self._batch_depth_logged = True
+                    print(f"\n[evaluate_depth] Incoming batch['depth']:")
+                    print(f"  Type: {type(raw_depth)}")
+                    print(f"  Shape: {raw_depth.shape if hasattr(raw_depth, 'shape') else 'N/A'}")
+                    print(f"  Max value: {max_val:.2f}")
+                    print(f"  Min value: {float(raw_depth.min()):.2f}")
+                    if max_val > 500:
+                        print(f"  ⚠️ WARNING: Max > 500, seems like 256x scaled!")
+        
         # Get predicted inv-depths
         inv_depths = self.model(batch)['inv_depths']         # list, first scale: (B,1,H,W)
         inv0 = inv_depths[0]
@@ -618,6 +634,7 @@ class ModelWrapper(torch.nn.Module):
                 if torch.is_tensor(x) and x.max() > 255:
                     return x / 256.0
                 return x
+            depth_gt      = _div256(depth_gt)
             depth_pred    = _div256(depth_pred)
             depth_pred_pp = _div256(depth_pred_pp)
 
@@ -750,25 +767,24 @@ def set_random_seed(seed):
 def setup_depth_net(config, prepared, **kwargs):
     """
     Create a depth network
-
-    Parameters
-    ----------
-    config : CfgNode
-        Network configuration
-    prepared : bool
-        True if the network has been prepared before
-    kwargs : dict
-        Extra parameters for the network
-
-    Returns
-    -------
-    depth_net : nn.Module
-        Create depth network
     """
     print0(pcolor('DepthNet: %s' % config.name, 'yellow'))
-    depth_net = load_class_args_create(config.name,
+
+    # ✅ 기존 내용 유지 + YAML params에서 min/max_depth 추출 (있을 때만)
+    extra_depth_args = {}
+    try:
+        if hasattr(config, 'params'):
+            if hasattr(config.params, 'min_depth'):
+                extra_depth_args['min_depth'] = float(config.params.min_depth)
+            if hasattr(config.params, 'max_depth'):
+                extra_depth_args['max_depth'] = float(config.params.max_depth)
+    except Exception:
+        pass
+
+    depth_net = load_class_args_create(
+        config.name,
         paths=['packnet_sfm.networks.depth',],
-        args={**config, **kwargs},
+        args={**config, **extra_depth_args, **kwargs},  # ← 추가 인자 병합
     )
     if not prepared and config.checkpoint_path != '':
         depth_net = load_network(depth_net, config.checkpoint_path,
@@ -779,23 +795,10 @@ def setup_depth_net(config, prepared, **kwargs):
 def setup_pose_net(config, prepared, **kwargs):
     """
     Create a pose network
-
-    Parameters
-    ----------
-    config : CfgNode
-        Network configuration
-    prepared : bool
-        True if the network has been prepared before
-    kwargs : dict
-        Extra parameters for the network
-
-    Returns
-    -------
-    pose_net : nn.Module
-        Created pose network
     """
     print0(pcolor('PoseNet: %s' % config.name, 'yellow'))
-    pose_net = load_class_args_create(config.name,
+    pose_net = load_class_args_create(
+        config.name,
         paths=['packnet_sfm.networks.pose',],
         args={**config, **kwargs},
     )
@@ -808,34 +811,39 @@ def setup_pose_net(config, prepared, **kwargs):
 def setup_model(config, prepared, **kwargs):
     """
     Create a model
-
-    Parameters
-    ----------
-    config : CfgNode
-        Model configuration (cf. configs/default_config.py)
-    prepared : bool
-        True if the model has been prepared before
-    kwargs : dict
-        Extra parameters for the model
-
-    Returns
-    -------
-    model : nn.Module
-        Created model
     """
     print0(pcolor('Model: %s' % config.name, 'yellow'))
+
+    # ✅ 기존 loss 인자 유지 + YAML params에서 min/max_depth 전달
+    model_args = {**config.loss}
+    try:
+        if hasattr(config, 'params'):
+            if hasattr(config.params, 'min_depth'):
+                model_args['min_depth'] = float(config.params.min_depth)
+            if hasattr(config.params, 'max_depth'):
+                model_args['max_depth'] = float(config.params.max_depth)
+    except Exception:
+        pass
+
     model = load_class(config.name, paths=['packnet_sfm.models',])(
-        **{**config.loss, **kwargs})
-    # Add depth network if required
+        **{**model_args, **kwargs})
+
+    # 기존 네트워크 추가 로직 그대로 + depth_net에 model.params의 min/max 전달
     if 'depth_net' in model.network_requirements:
-        model.add_depth_net(setup_depth_net(config.depth_net, prepared))
-    # Add pose network if required
+        depth_extra = {}
+        try:
+            if hasattr(config, 'params'):
+                if hasattr(config.params, 'min_depth'):
+                    depth_extra['min_depth'] = float(config.params.min_depth)
+                if hasattr(config.params, 'max_depth'):
+                    depth_extra['max_depth'] = float(config.params.max_depth)
+        except Exception:
+            pass
+        model.add_depth_net(setup_depth_net(config.depth_net, prepared, **depth_extra))
     if 'pose_net' in model.network_requirements:
         model.add_pose_net(setup_pose_net(config.pose_net, prepared))
-    # If a checkpoint is provided, load pretrained model
     if not prepared and config.checkpoint_path != '':
         model = load_network(model, config.checkpoint_path, 'model')
-    # Return model
     return model
 
 

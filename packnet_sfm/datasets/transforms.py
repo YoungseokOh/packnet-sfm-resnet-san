@@ -13,6 +13,9 @@ try:
 except ImportError:
     ADVANCED_AUGMENTATION_AVAILABLE = False
 
+# 타입 힌트 (기존 코드 영향 없음)
+from typing import Callable, Tuple, Dict, Any
+
 ########################################################################################################################
 
 def train_transforms(sample, image_shape, jittering, crop_train_borders):
@@ -101,10 +104,18 @@ def test_transforms(sample, image_shape, crop_eval_borders):
     return sample
 
 def get_transforms(mode, image_shape=(), jittering=(), crop_train_borders=(),
-                   crop_eval_borders=(), **kwargs):
+                    crop_eval_borders=(), **kwargs):
     """
     Get data augmentation transformations for each split
     """
+    # augmentation 섹션에서 image_shape가 지정되었으면 (기존 인자가 비어 있을 때만) 주입
+    augmentation = kwargs.get('augmentation', None)
+    if (not image_shape) and augmentation and augmentation.get('image_shape'):
+        try:
+            h, w = augmentation['image_shape']
+            image_shape = (int(h), int(w))
+        except Exception:
+            pass
     
     # 🆕 Advanced augmentation 검사 (kwargs에서 확인)
     augmentation = kwargs.get('augmentation', None)
@@ -128,6 +139,19 @@ def get_transforms(mode, image_shape=(), jittering=(), crop_train_borders=(),
                     return KITTIAdvancedValTransform(augmentation)
             else:
                 print(f"⚠️ Advanced augmentation requested but not available")
+        
+        # 🆕 기본 파이프라인에서 augmentation.resize / color_jitter 지원
+        # - 기존 인자(image_shape, jittering)가 비어 있을 때만 채워 넣어 기존 동작은 유지
+        if (not image_shape) and augmentation.get('resize'):
+            try:
+                h, w = augmentation['resize']
+                image_shape = (int(h), int(w))
+            except Exception:
+                pass
+        if (not jittering) and augmentation.get('color_jitter'):
+            cj = augmentation['color_jitter']
+            if isinstance(cj, (list, tuple)) and len(cj) >= 4:
+                jittering = tuple(cj[:4])
     
     # 기존 코드 그대로 유지
     if mode == 'train':
@@ -146,5 +170,22 @@ def get_transforms(mode, image_shape=(), jittering=(), crop_train_borders=(),
     else:
         raise ValueError('Unknown mode {}'.format(mode))
 
-########################################################################################################################
+# 🆕 옵션: augmentation dict만으로 간단 파이프라인을 만들고 싶을 때 사용할 수 있는 helper
+def build_transforms_from_augmentation(augmentation: Dict[str, Any]) -> Tuple[Callable, Callable]:
+    """
+    augmentation 섹션으로부터 (train_tf, valid_tf) 콜러블을 빌드합니다.
+    기존 경로(get_transforms(mode, ...))를 사용 중이면 이 함수는 사용하지 않아도 됩니다.
+    """
+    resize_shape = None
+    jittering = ()
+    if augmentation.get('resize'):
+        try:
+            h, w = augmentation['resize']
+            resize_shape = (int(h), int(w))
+        except Exception:
+            resize_shape = None
+    if augmentation.get('color_jitter'):
+        cj = augmentation['color_jitter']
+        if isinstance(cj, (list, tuple)) and len(cj) >= 4:
+            jittering = tuple(cj[:4])
 

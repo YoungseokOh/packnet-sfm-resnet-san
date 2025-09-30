@@ -1,7 +1,7 @@
 model:
     name: 'SemiSupCompletionModel'
     loss:
-        supervised_method: 'sparse-ssi-silog'
+        supervised_method: 'sparse-silog'
         supervised_num_scales: 1
         supervised_loss_weight: 1.0
     optimizer:
@@ -35,21 +35,21 @@ datasets:
     train:
         batch_size: 4
         dataset: ['KITTI']
-        path: ['/data/datasets/KITTI_raw']
-        split: ['data_splits/eigen_zhou_files.txt']
+        path: ['/workspace/data/KITTI_raw']
+        split: ['data_splits/eigen_test_files_400.txt']
         input_depth_type: ['velodyne']
         depth_type: ['groundtruth']
         repeat: [1]
     validation:
         dataset: ['KITTI']
-        path: ['/data/datasets/KITTI_raw']
-        split: ['data_splits/eigen_test_files.txt']
+        path: ['/workspace/data/KITTI_raw']
+        split: ['data_splits/eigen_test_files_400.txt']
         input_depth_type: ['velodyne','']
         depth_type: ['groundtruth','groundtruth']
     test:
         dataset: ['KITTI']
-        path: ['/data/datasets/KITTI_raw']
-        split: ['data_splits/eigen_test_files.txt']
+        path: ['/workspace/data/KITTI_raw']
+        split: ['data_splits/eigen_test_files_400.txt']
         input_depth_type: ['velodyne','']
         depth_type: ['groundtruth','groundtruth']
 
@@ -63,8 +63,8 @@ arch:
     eval_subset_size: 100
 
 checkpoint:
-    filepath: 'checkpoints/resnetsan01-quantized_Floatfunc/'
+    filepath: 'checkpoints/resnetsan01-KITTI_test/'
     save_top_k: -1
 
 save:
-    folder: 'outputs/resnetsan01-quantized_Floatfunc/'
+    folder: 'outputs/resnetsan01-KITTI_test/'

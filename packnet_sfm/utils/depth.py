@@ -275,6 +275,36 @@ def compute_depth_metrics(config, gt, pred, use_gt_scale=True):
     metrics : torch.Tensor [7]
         Depth metrics (abs_rel, sq_rel, rmse, rmse_log, a1, a2, a3)
     """
+    # Debug logging (only once)
+    if not hasattr(compute_depth_metrics, '_debug_logged'):
+        compute_depth_metrics._debug_logged = True
+        print("\n" + "="*80)
+        print("[DEBUG] compute_depth_metrics called")
+        print("="*80)
+        print(f"Config settings:")
+        print(f"  min_depth: {config.min_depth}")
+        print(f"  max_depth: {config.max_depth}")
+        print(f"  crop: '{config.crop}'")
+        print(f"  scale_output: '{config.scale_output}'")
+        print(f"  use_gt_scale: {use_gt_scale}")
+        print(f"\nInput shapes:")
+        print(f"  GT shape: {gt.shape}")
+        print(f"  Pred shape (before scaling): {pred.shape}")
+        
+        # Check raw values
+        valid_gt = gt > 0
+        if valid_gt.any():
+            print(f"\nGT depth statistics:")
+            print(f"  Range: [{gt[valid_gt].min().item():.4f}, {gt[valid_gt].max().item():.4f}]")
+            print(f"  Mean: {gt[valid_gt].mean().item():.4f}")
+            print(f"  Median: {gt[valid_gt].median().item():.4f}")
+            print(f"  Valid pixels: {valid_gt.sum().item()} / {valid_gt.numel()} ({100*valid_gt.float().mean().item():.2f}%)")
+        
+        print(f"\nPred depth statistics (before scaling):")
+        print(f"  Range: [{pred.min().item():.4f}, {pred.max().item():.4f}]")
+        print(f"  Mean: {pred.mean().item():.4f}")
+        print(f"  Median: {pred.median().item():.4f}")
+    
     crop = config.crop == 'garg'
 
     # Initialize variables
@@ -282,31 +312,68 @@ def compute_depth_metrics(config, gt, pred, use_gt_scale=True):
     abs_diff = abs_rel = sq_rel = rmse = rmse_log = a1 = a2 = a3 = 0.0
     # Interpolate predicted depth to ground-truth resolution
     pred = scale_depth(pred, gt, config.scale_output)
+    
+    # Debug after scaling (only once)
+    if not hasattr(compute_depth_metrics, '_debug_after_scale'):
+        compute_depth_metrics._debug_after_scale = True
+        print(f"\nAfter scale_depth (scale_output='{config.scale_output}'):")
+        print(f"  Pred shape: {pred.shape}")
+        print(f"  Pred range: [{pred.min().item():.4f}, {pred.max().item():.4f}]")
+    
     # If using crop
     if crop:
         crop_mask = torch.zeros(gt.shape[-2:]).byte().type_as(gt)
         y1, y2 = int(0.40810811 * gt_height), int(0.99189189 * gt_height)
         x1, x2 = int(0.03594771 * gt_width), int(0.96405229 * gt_width)
         crop_mask[y1:y2, x1:x2] = 1
+    
     # For each depth map
-    for pred_i, gt_i in zip(pred, gt):
+    for i, (pred_i, gt_i) in enumerate(zip(pred, gt)):
         gt_i, pred_i = torch.squeeze(gt_i), torch.squeeze(pred_i)
         # Keep valid pixels (min/max depth and crop)
         valid = (gt_i > config.min_depth) & (gt_i < config.max_depth)
         valid = valid & crop_mask.bool() if crop else valid
+        
+        # Debug valid mask (only for first batch)
+        if i == 0 and not hasattr(compute_depth_metrics, '_debug_valid'):
+            compute_depth_metrics._debug_valid = True
+            print(f"\nValid mask for first sample:")
+            print(f"  Valid pixels after depth range filter: {valid.sum().item()} / {valid.numel()}")
+        
         # Stop if there are no remaining valid pixels
         if valid.sum() == 0:
+            if i == 0:
+                print(f"  WARNING: No valid pixels in first sample!")
             continue
+        
         # Keep only valid pixels
         gt_i, pred_i = gt_i[valid], pred_i[valid]
+        
         # Ground-truth median scaling if needed
         if use_gt_scale:
-            pred_i = pred_i * torch.median(gt_i) / torch.median(pred_i)
+            gt_median = torch.median(gt_i)
+            pred_median = torch.median(pred_i)
+            scale = gt_median / pred_median
+            
+            # Debug scaling (only for first batch)
+            if i == 0 and not hasattr(compute_depth_metrics, '_debug_scale'):
+                compute_depth_metrics._debug_scale = True
+                print(f"\nMedian scaling for first sample:")
+                print(f"  GT median: {gt_median.item():.4f}")
+                print(f"  Pred median: {pred_median.item():.4f}")
+                print(f"  Scale factor: {scale.item():.4f}")
+                print(f"  Pred range before scale: [{pred_i.min().item():.4f}, {pred_i.max().item():.4f}]")
+            
+            pred_i = pred_i * scale
+            
+            if i == 0 and not hasattr(compute_depth_metrics, '_debug_scale_after'):
+                compute_depth_metrics._debug_scale_after = True
+                print(f"  Pred range after scale: [{pred_i.min().item():.4f}, {pred_i.max().item():.4f}]")
+        
         # Clamp predicted depth values to min/max values
         pred_i = pred_i.clamp(config.min_depth, config.max_depth)
 
         # Calculate depth metrics
-
         thresh = torch.max((gt_i / pred_i), (pred_i / gt_i))
         a1 += (thresh < 1.25     ).float().mean()
         a2 += (thresh < 1.25 ** 2).float().mean()
@@ -319,6 +386,16 @@ def compute_depth_metrics(config, gt, pred, use_gt_scale=True):
         rmse += torch.sqrt(torch.mean(diff_i ** 2))
         rmse_log += torch.sqrt(torch.mean((torch.log(gt_i) -
                                            torch.log(pred_i)) ** 2))
+        
+        # Debug first sample metrics
+        if i == 0 and not hasattr(compute_depth_metrics, '_debug_metrics'):
+            compute_depth_metrics._debug_metrics = True
+            print(f"\nFirst sample metrics:")
+            print(f"  abs_rel: {(torch.mean(torch.abs(diff_i) / gt_i)).item():.6f}")
+            print(f"  rmse: {torch.sqrt(torch.mean(diff_i ** 2)).item():.6f}")
+            print(f"  a1: {(thresh < 1.25).float().mean().item():.6f}")
+            print("="*80 + "\n")
+    
     # Return average values for each metric
     return torch.tensor([metric / batch_size for metric in
         [abs_rel, sq_rel, rmse, rmse_log, a1, a2, a3]]).type_as(gt)

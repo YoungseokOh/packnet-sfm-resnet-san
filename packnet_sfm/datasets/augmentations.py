@@ -1,6 +1,7 @@
 # Copyright 2020 Toyota Research Institute.  All rights reserved.
 
 import cv2
+import torch
 import numpy as np
 import random
 import torchvision.transforms as transforms
@@ -103,44 +104,59 @@ def resize_sample_image_and_intrinsics(sample, shape,
                                        image_interpolation=InterpolationMode.LANCZOS):
     """
     Resizes the image and intrinsics of a sample
-
-    Parameters
-    ----------
-    sample : dict
-        Dictionary with sample values
-    shape : tuple (H,W)
-        Output shape
-    image_interpolation : int
-        Interpolation mode
-
-    Returns
-    -------
-    sample : dict
-        Resized sample
     """
-    # Resize image and corresponding intrinsics
     image_transform = transforms.Resize(shape, interpolation=image_interpolation)
     (orig_w, orig_h) = sample['rgb'].size
     (out_h, out_w) = shape
-    # Scale intrinsics
-    for key in filter_dict(sample, [
-        'intrinsics'
-    ]):
-        intrinsics = np.copy(sample[key])
-        intrinsics[0] *= out_w / orig_w
-        intrinsics[1] *= out_h / orig_h
-        sample[key] = intrinsics
-    # Scale images
-    for key in filter_dict(sample, [
-        'rgb', 'rgb_original',
-    ]):
+    scale_w = out_w / orig_w
+    scale_h = out_h / orig_h
+
+    # 1) 전통적 pinhole K 또는 [fx,fy,cx,cy]만 스케일
+    for key in filter_dict(sample, ['intrinsics']):
+        intrinsics = sample[key]
+        try:
+            arr = np.array(intrinsics)
+            if arr.shape == (3, 3):
+                K = np.copy(arr)
+                K[0, 0] *= scale_w  # fx
+                K[1, 1] *= scale_h  # fy
+                K[0, 2] *= scale_w  # cx
+                K[1, 2] *= scale_h  # cy
+                sample[key] = K
+            elif arr.size >= 4 and arr.ndim == 1:
+                # [fx, fy, cx, cy] 형태일 때만 안전 스케일
+                arr = np.copy(arr)
+                arr[0] *= scale_w  # fx
+                arr[1] *= scale_h  # fy
+                arr[2] *= scale_w  # cx
+                arr[3] *= scale_h  # cy
+                sample[key] = arr
+            else:
+                # Fisheye 등 비표준 벡터(예: 18개)면 스킵
+                pass
+        except Exception:
+            pass
+
+    # 2) Fisheye(VADAS) 계열: distortion_coeffs의 ux, uy만 스케일
+    if 'distortion_coeffs' in sample and isinstance(sample['distortion_coeffs'], dict):
+        dc = sample['distortion_coeffs']
+        if 'ux' in dc and 'uy' in dc:
+            # 텐서/넘파이/스칼라 모두 처리
+            def _scale_val(v, s): 
+                try:
+                    return type(v)(v * s)
+                except Exception:
+                    return float(v) * s
+            dc['ux'] = _scale_val(dc['ux'], scale_w)
+            dc['uy'] = _scale_val(dc['uy'], scale_h)
+        dc['image_size'] = (out_h, out_w)
+
+    # 3) 이미지/컨텍스트 이미지 리사이즈
+    for key in filter_dict(sample, ['rgb', 'rgb_original']):
         sample[key] = image_transform(sample[key])
-    # Scale context images
-    for key in filter_dict(sample, [
-        'rgb_context', 'rgb_context_original',
-    ]):
+    for key in filter_dict(sample, ['rgb_context', 'rgb_context_original']):
         sample[key] = [image_transform(k) for k in sample[key]]
-    # Return resized sample
+
     return sample
 
 def resize_sample(sample, shape, image_interpolation=InterpolationMode.LANCZOS):

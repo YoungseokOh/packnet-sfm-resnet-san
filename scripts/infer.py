@@ -4,53 +4,7 @@ import argparse
 import numpy as np
 import os
 import torch
-
-from glob import glob
-from cv2 import imwrite
-
-from packnet_sfm.models.model_wrapper import ModelWrapper
-from packnet_sfm.datasets.augmentations import resize_image, to_tensor
-from packnet_sfm.utils.horovod import hvd_init, rank, world_size, print0
-from packnet_sfm.utils.image import load_image
-from packnet_sfm.utils.config import parse_test_file
-from packnet_sfm.utils.load import set_debug
-from packnet_sfm.utils.depth import write_depth, inv2depth, viz_inv_depth
-from packnet_sfm.utils.logging import pcolor
-
-
-def is_image(file, ext=('.png', '.jpg',)):
-    """Check if a file is an image with certain extensions"""
-    return file.endswith(ext)
-
-
-def parse_args():
-    parser = argparse.ArgumentParser(description='PackNet-SfM inference of depth maps from images')
-    parser.add_argument('--checkpoint', type=str, help='Checkpoint (.ckpt)')
-    parser.add_argument('--input', type=str, help='Input file or folder')
-    parser.add_argument('--output', type=str, help='Output file or folder')
-    parser.add_argument('--image_shape', type=int, nargs='+', default=None,
-                        help='Input and output image shape ' 
-                             '(default: checkpoint\'s config.datasets.augmentation.image_shape)')
-    parser.add_argument('--half', action="store_true", help='Use half precision (fp16)')
-    parser.add_argument('--save', type=str, choices=['npz', 'png'], default=None,
-                        help='Save format (npz or png). Default is None (no depth map is saved).')
-    parser.add_argument('--mask_file', type=str, default=None,
-                        help='Path to the binary mask file (e.g., /workspace/packnet-sfm/ncdb-cls/synced_data/binary_mask.png).')
-    args = parser.parse_args()
-    assert args.checkpoint.endswith('.ckpt'), \
-        'You need to provide a .ckpt file as checkpoint'
-    assert args.image_shape is None or len(args.image_shape) == 2, \
-        'You need to provide a 2-dimensional tuple as shape (H,W)'
-    assert (is_image(args.input) and is_image(args.output)) or \
-           (not is_image(args.input) and not is_image(args.input)), \
-        'Input and output must both be images or folders'
-    return args
-
-
-import numpy as np
-import os
-import torch
-from PIL import Image # Add PIL for mask loading
+from PIL import Image  # for mask loading
 
 from glob import glob
 from cv2 import imwrite

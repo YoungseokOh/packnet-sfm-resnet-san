@@ -60,38 +60,121 @@
         //     "stopOnEntry": false,
         //     "justMyCode": false
         // },
+        
+        // {
+        //     "name": "Train ONE STEP (Meter /256)",
+        //     "type": "debugpy",
+        //     "request": "launch",
+        //     "program": "${workspaceFolder}/scripts/train.py",
+        //     "console": "integratedTerminal",
+        //     "cwd": "${workspaceFolder}",
+        //     "args": ["configs/train_resnet_san_ncdb.yaml"],
+        //     "env": {
+        //         "PYTHONPATH": "${workspaceFolder}",
+        //         "PYTHONWARNINGS": "ignore::UserWarning",
+        //         "FORCE_DEPTH_DIV256": "0",
+        //         "ENC_SCALE": "0",
+        //         "ONE_STEP_ONLY": "1",
+        //         "ONE_STEP_VIZ_DIR": "one_step_viz_meter",
+        //         "LOSS_INV_VIZ_DIR": "loss_inv_viz_meter",
+        //         "LOSS_INV_VIZ_ONCE": "1",
+        //         "DISP_STATS_ONCE": "1",
+        //         "GT_DEPTH_DEBUG_ONCE":"1"
+        //     }
+        // },
 
         {
-            "name": "Train from Config",
-            "type": "debugpy", 
-            "request": "launch",
-
-            // 실행할 스크립트 파일을 하나만 주석 해제하세요:
-            "program": "${workspaceFolder}/scripts/train.py",
-            // "program": "${workspaceFolder}/scripts/eval.py",
-            // "program": "${workspaceFolder}/scripts/evaluate_depth_maps.py",
-            // "program": "${workspaceFolder}/scripts/create_depth_maps.py",
-            // "program": "${file}",
-            "console": "integratedTerminal",
-            "env": 
-            {
-                "PYTHONPATH": "${workspaceFolder}",
-                "PYTHONWARNINGS": "ignore::UserWarning",
-                "DEPTH_RANGE_DEBUG": "0", // ✅ 추가
-                "FORCE_DEPTH_DIV256": "1",
-                "NCDB_DEPTH_VARIANT": "newest_depth_maps", // NCDB 용
-            },    
-            "cwd": "${workspaceFolder}",
-            // 필요에 따라 args 를 주석 해제/수정하세요:
-
-            // Train
-            "args": 
+        "name": "Train ONE STEP (ENC ×256)",
+        "type": "debugpy",
+        "request": "launch",
+        // "program": "${workspaceFolder}/scripts/train.py",
+        "program": "${workspaceFolder}/scripts/eval.py",
+        // "program": "${workspaceFolder}/scripts/infer_ncdb.py",
+        "console": "integratedTerminal",
+        "cwd": "${workspaceFolder}",
+        // Training
+        // "args": ["configs/train_resnet_san_ncdb_640x384.yaml"],
+        // "args": ["configs/train_resnet_san_ncdb.yaml"],
+        // Evaliation
+        "args": 
             [
-                // "configs/train_resnet_san_kitti.yaml"
-                "configs/train_resnet_san_ncdb.yaml"
-                // "configs/train_resnet_selfsup_ncdb.yaml"
-                // "configs/train_resnet_san_ncdb_w_respt.yaml"
+                "--checkpoint",
+                "ResNet-SAN_epoch=49_ncdb-cls-640x384.ckpt",
+                "--config", 
+                "configs/train_resnet_san_ncdb_640x384.yaml"
             ],
+
+        // Inference
+        // "args":
+        // [
+        //     "--checkpoint", "ResNet-SAN_epoch=49_ncdb-cls-640x384.ckpt",
+        //     "--config", "configs/train_resnet_san_ncdb_640x384.yaml",
+        //     "--output", "outputs/resnet_san_ncdb_640x384_test",
+        //     "--save", "npz",
+        //     "--split_name", "test",
+        //     "--resize_w", "640",
+        //     "--resize_h", "384"
+        // ],
+
+
+        "env": {
+            "PYTHONPATH": "${workspaceFolder}",
+            "PYTHONWARNINGS": "ignore::UserWarning",
+            "NCDB_DEPTH_VARIANT": "newest_depth_maps", // NCDB 용
+            "FORCE_DEPTH_DIV256": "0",
+            "ENC_SCALE": "0",
+            "ONE_STEP_ONLY": "0",
+            "ONE_STEP_VIZ_DIR": "one_step_viz_enc",
+            "LOSS_INV_VIZ_DIR": "loss_inv_viz_enc",
+            "LOSS_INV_VIZ_ONCE": "0",
+            "DISP_STATS_ONCE": "0",
+            "GT_DEPTH_DEBUG_ONCE":"0",
+            "SSI_SILOG_LOG_ONCE":"0",
+            "SSI_SILOG_LOG_EVERY":"0",
+            "SSI_SILOG_VERBOSE":"0",
+            "SAN01_INV_MODE":"bounded",
+            "SAN01_INV_SPACE":"log",
+            "DEPTH_RANGE_DEBUG": "1" // ✅ 추가
+            }
+        },
+
+
+
+
+
+        // {
+        //     "name": "Train from Config",
+        //     "type": "debugpy", 
+        //     "request": "launch",
+
+        //     // 실행할 스크립트 파일을 하나만 주석 해제하세요:
+        //     "program": "${workspaceFolder}/scripts/train.py",
+        //     // "program": "${workspaceFolder}/scripts/eval.py",
+        //     // "program": "${workspaceFolder}/scripts/evaluate_depth_maps.py",
+        //     // "program": "${workspaceFolder}/scripts/create_depth_maps.py",
+        //     // "program": "${file}",
+        //     "console": "integratedTerminal",
+        //     "env": 
+        //     {
+        //         "PYTHONPATH": "${workspaceFolder}",
+        //         "PYTHONWARNINGS": "ignore::UserWarning",
+        //         "DEPTH_RANGE_DEBUG": "0", // ✅ 추가
+        //         "FORCE_DEPTH_DIV256": "0",
+        //         "NCDB_DEPTH_VARIANT": "newest_depth_maps", // NCDB 용
+        //     },    
+        //     "cwd": "${workspaceFolder}",
+        //     // 필요에 따라 args 를 주석 해제/수정하세요:
+
+        //     // Train
+        //     "args": 
+        //     [
+        //         // "configs/train_resnet_san_kitti.yaml"
+        //         "configs/train_resnet_san_ncdb.yaml"
+        //         // "configs/train_resnet_selfsup_ncdb.yaml"
+        //         // "configs/train_resnet_san_ncdb_w_respt.yaml"
+        //     ],
+        // },
+
 
         //     // Create Depth Maps
         //     // "args":
@@ -112,16 +195,16 @@
         //     // ],
 
         //     // eval.py
-        //     "args": 
-        //     [
-        //         "--checkpoint",
-        //         "checkpoints/resnetsan01_newest_test/default_config-train_resnet_san_ncdb-2025.09.05-09h40m21s/epoch=29_ncdb-cls-combined_val-loss=0.000.ckpt",
-        //         "--config", 
-        //         "configs/train_resnet_san_ncdb.yaml"
-        //     ],
+            // "args": 
+            // [
+            //     "--checkpoint",
+            //     "checkpoints/resnetsan01_newest_test_fixed/default_config-train_resnet_san_ncdb-2025.09.15-10h02m38s/epoch=29_ncdb-cls-combined_val-loss=0.000.ckpt",
+            //     "--config", 
+            //     "configs/train_resnet_san_ncdb.yaml"
+            // ],
         
         
-        },
+     
 
 
 

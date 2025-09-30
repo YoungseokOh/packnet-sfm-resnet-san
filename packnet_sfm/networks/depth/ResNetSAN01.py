@@ -1,10 +1,12 @@
+import os
 import torch
 import torch.nn as nn
+from torchvision.utils import save_image  # ← 추가
+import json  # ← 추가
 
 from packnet_sfm.networks.layers.resnet.resnet_encoder import ResnetEncoder
 from packnet_sfm.networks.layers.resnet.depth_decoder import DepthDecoder
-from packnet_sfm.networks.layers.enhanced_minkowski_encoder import EnhancedMinkowskiEncoder  # 🆕
-from packnet_sfm.networks.layers.resnet.layers import disp_to_depth
+from packnet_sfm.networks.layers.enhanced_minkowski_encoder import EnhancedMinkowskiEncoder
 from functools import partial
 
 
@@ -25,8 +27,17 @@ class ResNetSAN01(nn.Module):
     kwargs : dict
         Extra parameters
     """
-    def __init__(self, dropout=None, version=None, use_film=False, film_scales=[0], **kwargs):
+    def __init__(self, dropout=None, version=None, use_film=False, film_scales=[0],
+                 use_enhanced_lidar=False,
+                 min_depth=0.5, max_depth=80.0, **kwargs):  # ← 추가 인자 (이름 유지)
         super().__init__()
+        
+        # 안전 보정
+        if max_depth <= 0: max_depth = 80.0
+        if min_depth <= 0: min_depth = 0.5
+        if max_depth <= min_depth: max_depth = min_depth + 1.0
+        self.min_depth = float(min_depth)
+        self.max_depth = float(max_depth)
         
         # 🆕 기존 파라미터만 사용
         use_enhanced_lidar = kwargs.get('use_enhanced_lidar', False)  # 기본값 False로 변경
@@ -104,14 +115,75 @@ class ResNetSAN01(nn.Module):
             print(f"   RGB channels per scale: {rgb_channels_per_scale}")
         
         self.init_weights()
+        
+        self._disp_stats_done = False  # ✅ DISP_STATS_ONCE 제어 플래그
 
     def init_weights(self):
-        """Initialize network weights"""
-        for m in self.modules():
+        """Initialize only newly created layers; keep pretrained encoder intact."""
+        # Skip encoder (pretrained)
+        for name, m in self.named_modules():
+            if name.startswith('encoder'):
+                continue
             if isinstance(m, (nn.Conv2d, nn.Conv3d)):
                 nn.init.xavier_uniform_(m.weight)
                 if m.bias is not None:
                     m.bias.data.zero_()
+
+    def _maybe_log_disp_stats(self, outputs):
+        """
+        ENV:
+          DISP_STATS_ONCE=1  -> 한 번만 disparity 통계 출력
+          DISP_STATS_EVERY=1 -> 매 step 출력
+          DISP_STATS_DIR     -> 저장 폴더 (기본: disp_stats)
+        """
+        every = os.environ.get("DISP_STATS_EVERY", "0") == "1"
+        once  = os.environ.get("DISP_STATS_ONCE", "0") == "1"
+        if not (every or once):
+            return
+        if once and self._disp_stats_done:
+            return
+
+        # scale 0 기준 (없으면 리턴)
+        key = ("disp", 0)
+        if key not in outputs:
+            return
+        disp = outputs[key].detach()
+        v = disp[disp.isfinite()]
+        if v.numel() == 0:
+            print("[DISP_STATS] no finite values")
+            return
+        q = torch.quantile(v, torch.tensor([0.0,0.01,0.05,0.5,0.95,0.99,1.0], device=v.device))
+        stats = {
+            "min": float(q[0]), "p1": float(q[1]), "p5": float(q[2]),
+            "median": float(q[3]), "p95": float(q[4]), "p99": float(q[5]),
+            "max": float(q[6]),
+            "mean": float(v.mean()), "std": float(v.std()),
+            "sat>0.99": float((disp > 0.99).float().mean()),
+            "sat<0.01": float((disp < 0.01).float().mean()),
+        }
+        print(f"[DISP_STATS] scale0:", " ".join(f"{k}={stats[k]:.4g}" for k in stats))
+
+        # ===== 저장 (JSON + PNG 한 장) =====
+        try:
+            if not hasattr(self, "_disp_stats_idx"):
+                self._disp_stats_idx = 0
+            out_dir = os.environ.get("DISP_STATS_DIR", "disp_stats")
+            os.makedirs(out_dir, exist_ok=True)
+            json_path = os.path.join(out_dir, f"disp_stats_{self._disp_stats_idx:05d}.json")
+            with open(json_path, "w") as f:
+                json.dump(stats, f, indent=2)
+            # 첫 배치 첫 샘플 저장 (0~1 값 가정)
+            png_path = os.path.join(out_dir, f"disp_{self._disp_stats_idx:05d}.png")
+            save_image(disp[0:1], png_path)
+            # 인덱스 증가 (EVERY 모드 대비)
+            self._disp_stats_idx += 1
+        except Exception as e:
+            print("[DISP_STATS][SAVE_ERROR]", e)
+        # ===============================
+
+        if once:
+            self._disp_stats_done = True
+            # 이후 저장 반복 방지 (EVERY가 아니면 인덱스 고정)
 
     def run_network(self, rgb, input_depth=None):
         """
@@ -167,19 +239,58 @@ class ResNetSAN01(nn.Module):
             skip_features = fused_features
         
         # Decode to get inverse depth maps
-        inv_depths_dict = self.decoder(skip_features)
-        
-        # Convert to list format
+        outputs = self.decoder(skip_features)  # ("disp", i) 는 이미 sigmoid 통과된 값 (0~1)
+
+        # ✅ 두 번째 sigmoid 제거: decoder 출력 그대로 사용
+        #    헤드 매핑: 기본은 [1/max, 1/min] 선형 보간으로 "유한 범위"의 inverse-depth를 만듭니다.
+        #    필요 시 SAN01_INV_MODE=min_only 로 설정하면 이전 "disp / min_depth" 동작을 사용할 수 있습니다.
+        inv_mode = os.environ.get("SAN01_INV_MODE", "bounded").lower()
+        inv_space = os.environ.get("SAN01_INV_SPACE", "log").lower()  # 'log' | 'lin'
+        if not hasattr(self, "_inv_mode_logged"):
+            print(f"\n[ResNetSAN01] disp->inv mode={inv_mode}, space={inv_space} | min_depth={self.min_depth} max_depth={self.max_depth}")
+            self._inv_mode_logged = True
+
+        def disp_to_inv(disp):
+            if inv_mode == "min_only":
+                # 이전 동작: inv  disp / min_depth (깊이 상한 없음 → 발산 위험)
+                return disp / self.min_depth
+            # 권장 동작 (bounded): inv in [1/max, 1/min]
+            #   space='lin' : linear in inverse-depth (Monodepth-style)
+            #   space='log' : linear in log(inverse-depth) → better conditioning for wide ranges
+            min_disp = 1.0 / max(self.max_depth, 1e-6)
+            max_disp = 1.0 / max(self.min_depth, 1e-6)
+            # 작은 마진으로 경계에서 살짝 떨어뜨려 clamp 경사 소실 방지
+            try:
+                frac = float(os.environ.get("SAN01_INV_MARGIN", "0.01"))  # 1% 기본
+            except Exception:
+                frac = 0.01
+            frac = max(0.0, min(frac, 0.2))  # 안전 범위
+            if inv_space == "lin":
+                rng = max_disp - min_disp
+                min_d2 = min_disp + frac * rng
+                max_d2 = max_disp - frac * rng
+                return min_d2 + (max_d2 - min_d2) * disp
+            # log-space interpolation with margin applied in log domain
+            log_min = torch.log(torch.tensor(min_disp, device=disp.device, dtype=disp.dtype))
+            log_max = torch.log(torch.tensor(max_disp, device=disp.device, dtype=disp.dtype))
+            log_rng = log_max - log_min
+            log_min2 = log_min + frac * log_rng
+            log_max2 = log_max - frac * log_rng
+            log_inv = log_min2 + (log_max2 - log_min2) * disp
+            return torch.exp(log_inv)
+
         if self.training:
+            if hasattr(self, "_maybe_log_disp_stats"):
+                self._maybe_log_disp_stats(outputs)
             inv_depths = [
-                inv_depths_dict[("disp", 0)],
-                inv_depths_dict[("disp", 1)],
-                inv_depths_dict[("disp", 2)],
-                inv_depths_dict[("disp", 3)],
+                disp_to_inv(outputs[("disp", 0)]),
+                disp_to_inv(outputs[("disp", 1)]),
+                disp_to_inv(outputs[("disp", 2)]),
+                disp_to_inv(outputs[("disp", 3)]),
             ]
         else:
-            inv_depths = [inv_depths_dict[("disp", 0)]]
-        
+            inv_depths = [disp_to_inv(outputs[("disp", 0)])]
+
         return inv_depths, skip_features
 
     def forward(self, rgb, input_depth=None, **kwargs):
