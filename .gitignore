@@ -40,6 +40,9 @@ enhanced_analysis_results/
 # *.jpg
 # *.md
 # *.txt
+*.json
+*.csv
+
 
 client.py
 client_infer.py

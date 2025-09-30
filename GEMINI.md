@@ -30,9 +30,6 @@
 
 # Sparse Auxiliary Networks for Unified Monocular Depth Prediction and Completion (SAN)
 
-> Guizilini et al., TRI. arXiv:2103.16690 (2021).  
-> 원문: https://arxiv.org/pdf/2103.16690
-
 ---
 
 ## TL;DR
@@ -115,6 +112,3 @@
 - 스킵 주입은 **정밀 정합(캘리브/타임싱크)** 에 민감.
 - 훈련 시 **sparsity 분포**를 충분히 커버하지 않으면 실제 성능 변동.
 
-
-## 참고
-- Guizilini, V., et al., **“Sparse Auxiliary Networks for Unified Monocular Depth Prediction and Completion.”** arXiv:2103.16690, 2021. (https://arxiv.org/pdf/2103.16690)

@@ -100,26 +100,37 @@ class ModelWrapper(torch.nn.Module):
         # 🔧 augmentation 설정을 제대로 전달
         augmentation_config = self.config.datasets.augmentation
         
+        # ✅ model.params에서 min_depth, max_depth 추출
+        dataset_depth_params = {}
+        if hasattr(self.config, 'model') and hasattr(self.config.model, 'params'):
+            if hasattr(self.config.model.params, 'min_depth'):
+                dataset_depth_params['min_depth'] = self.config.model.params.min_depth
+            if hasattr(self.config.model.params, 'max_depth'):
+                dataset_depth_params['max_depth'] = self.config.model.params.max_depth
+        
         # Setup train dataset (requirements are given by the model itself)
         self.train_dataset = setup_dataset(
             self.config.datasets.train, 'train',
             self.model.train_requirements, 
             augmentation=augmentation_config,  # 🆕 명시적으로 augmentation 전달
-            **augmentation_config)  # 🆕 기존 방식도 유지
+            **augmentation_config,  # 🆕 기존 방식도 유지
+            **dataset_depth_params)  # ✅ depth params 전달
         
         # Setup validation dataset
         self.validation_dataset = setup_dataset(
             self.config.datasets.validation, 'validation',
             validation_requirements, 
             augmentation=augmentation_config,  # 🆕 명시적으로 augmentation 전달
-            **augmentation_config)  # 🆕 기존 방식도 유지
+            **augmentation_config,  # 🆕 기존 방식도 유지
+            **dataset_depth_params)  # ✅ depth params 전달
         
         # Setup test dataset
         self.test_dataset = setup_dataset(
             self.config.datasets.test, 'test',
             test_requirements, 
             augmentation=augmentation_config,  # 🆕 명시적으로 augmentation 전달
-            **augmentation_config)  # 🆕 기존 방식도 유지
+            **augmentation_config,  # 🆕 기존 방식도 유지
+            **dataset_depth_params)  # ✅ depth params 전달
 
     @property
     def depth_net(self):
@@ -561,6 +572,22 @@ class ModelWrapper(torch.nn.Module):
         """
         Evaluate batch to produce depth metrics.
         """
+        
+        # ★ 디버깅: batch['depth']가 들어올 때 값 확인
+        if 'depth' in batch and batch['depth'] is not None:
+            raw_depth = batch['depth']
+            if hasattr(raw_depth, 'max'):
+                max_val = float(raw_depth.max())
+                if not hasattr(self, '_batch_depth_logged'):
+                    self._batch_depth_logged = True
+                    print(f"\n[evaluate_depth] Incoming batch['depth']:")
+                    print(f"  Type: {type(raw_depth)}")
+                    print(f"  Shape: {raw_depth.shape if hasattr(raw_depth, 'shape') else 'N/A'}")
+                    print(f"  Max value: {max_val:.2f}")
+                    print(f"  Min value: {float(raw_depth.min()):.2f}")
+                    if max_val > 500:
+                        print(f"  ⚠️ WARNING: Max > 500, seems like 256x scaled!")
+        
         # Get predicted inv-depths
         inv_depths = self.model(batch)['inv_depths']         # list, first scale: (B,1,H,W)
         inv0 = inv_depths[0]
@@ -622,26 +649,6 @@ class ModelWrapper(torch.nn.Module):
             depth_pred    = _div256(depth_pred)
             depth_pred_pp = _div256(depth_pred_pp)
 
-        if os.environ.get('DEPTH_RANGE_DEBUG', '0') == '1' and depth_gt is not None:
-            try:
-                pos = depth_gt[depth_gt > 0]
-                dmin = float(depth_gt.min())
-                dmax = float(depth_gt.max())
-                if pos.numel() > 0:
-                    p50 = float(torch.quantile(pos, 0.5))
-                    p90 = float(torch.quantile(pos, 0.9))
-                    p95 = float(torch.quantile(pos, 0.95))
-                else:
-                    p50 = p90 = p95 = 0.0
-                # 기존 EvalDepthRange + DepthDebug 함께 출력
-                valid_count = (depth_gt > 0).sum().item()
-                total_count = depth_gt.numel()
-                print(f"[EvalDepthRange] (scaled) min={dmin:.2f} max={dmax:.2f} "
-                      f"p50={p50:.2f} p90={p90:.2f} p95={p95:.2f} "
-                      f"pos={pos.numel()}/{depth_gt.numel()} | "
-                      f"[DepthDebug valid>0 {valid_count}/{total_count}]")
-            except Exception as e:
-                print(f"[EvalDepthRange] failed: {e}")
 
         # Compute metrics (tensor of 7 values each)
         metrics = OrderedDict()
@@ -812,9 +819,18 @@ def setup_model(config, prepared, **kwargs):
     model = load_class(config.name, paths=['packnet_sfm.models',])(
         **{**model_args, **kwargs})
 
-    # 기존 네트워크 추가 로직 그대로
+    # 기존 네트워크 추가 로직 그대로 + depth_net에 model.params의 min/max 전달
     if 'depth_net' in model.network_requirements:
-        model.add_depth_net(setup_depth_net(config.depth_net, prepared))
+        depth_extra = {}
+        try:
+            if hasattr(config, 'params'):
+                if hasattr(config.params, 'min_depth'):
+                    depth_extra['min_depth'] = float(config.params.min_depth)
+                if hasattr(config.params, 'max_depth'):
+                    depth_extra['max_depth'] = float(config.params.max_depth)
+        except Exception:
+            pass
+        model.add_depth_net(setup_depth_net(config.depth_net, prepared, **depth_extra))
     if 'pose_net' in model.network_requirements:
         model.add_pose_net(setup_pose_net(config.pose_net, prepared))
     if not prepared and config.checkpoint_path != '':
@@ -878,11 +894,18 @@ def setup_dataset(config, mode, requirements, **kwargs):
         # ncdb dataset
         elif config.dataset[i] == 'ncdb':
             from packnet_sfm.datasets.ncdb_dataset import NcdbDataset
+            
+            # ✅ min_depth, max_depth를 kwargs에서 가져오기 (prepare_datasets에서 전달됨)
+            min_depth = kwargs.get('min_depth', None)
+            max_depth = kwargs.get('max_depth', None)
+            
             dataset = NcdbDataset(
                 config.path[i], 
                 config.split[i],
                 transform=dataset_args.get('data_transform', None),
-                mask_file=getattr(config, "mask_file", [None])[i]
+                mask_file=getattr(config, "mask_file", [None])[i],
+                min_depth=min_depth,
+                max_depth=max_depth,
             )
         # DGP dataset
         elif config.dataset[i] == 'DGP':

@@ -349,6 +349,15 @@ def compute_depth_metrics(config, gt, pred, use_gt_scale=True):
         # Keep only valid pixels
         gt_i, pred_i = gt_i[valid], pred_i[valid]
         
+        # Debug filtered values (only for first batch)
+        if i == 0 and not hasattr(compute_depth_metrics, '_debug_filtered'):
+            compute_depth_metrics._debug_filtered = True
+            print(f"\nFiltered Pred/GT values (after valid mask):")
+            print(f"  GT range: [{gt_i.min().item():.4f}, {gt_i.max().item():.4f}]")
+            print(f"  GT mean: {gt_i.mean().item():.4f}, median: {gt_i.median().item():.4f}")
+            print(f"  Pred range: [{pred_i.min().item():.4f}, {pred_i.max().item():.4f}]")
+            print(f"  Pred mean: {pred_i.mean().item():.4f}, median: {pred_i.median().item():.4f}")
+        
         # Ground-truth median scaling if needed
         if use_gt_scale:
             gt_median = torch.median(gt_i)

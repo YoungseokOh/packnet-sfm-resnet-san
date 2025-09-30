@@ -10,7 +10,6 @@ from packnet_sfm.models.model_utils import merge_outputs
 from packnet_sfm.utils.depth import depth2inv, inv2depth
 # ❗ YOLOv8SAN01 모델을 임포트하여 타입 체크에 사용
 from packnet_sfm.networks.depth.YOLOv8SAN01 import YOLOv8SAN01
-from packnet_sfm.networks.depth.ResNetSAN01 import ResNetSAN01
 import json
 import math
 import matplotlib
@@ -64,9 +63,6 @@ class SemiSupCompletionModel(SelfSupModel):
         self.weight_rgbd = weight_rgbd
 
         self._one_step_viz_done = False  # ✅ 1회 저장 플래그
-
-        # 🆕 Shape 디버그 프린트 출력을 위한 플래그
-        self._shape_printed = False
 
     @property
     def logs(self):
@@ -426,23 +422,6 @@ class SemiSupCompletionModel(SelfSupModel):
                 self_sup_output = SelfSupModel.forward(
                     self, batch, return_logs=return_logs, progress=progress, **kwargs)
                 loss = (1.0 - self.supervised_loss_weight) * self_sup_output['loss']
-
-            # 🆕 학습 1회만 입력/출력 shape 디버그 프린트
-            if self.training and not self._shape_printed:
-                rgb_shape = list(batch['rgb'].shape)
-                pred_shape = list(self_sup_output['inv_depths'][0].shape) if self_sup_output['inv_depths'] else None
-                gt_depth = batch.get('depth', None)
-                gt_shape = list(gt_depth.shape) if isinstance(gt_depth, torch.Tensor) else None
-                print("\n" + "=" * 60)
-                print("DEBUG[ShapeCheck] 입력/출력 텐서 해상도 (학습 중 1회)")
-                print(f"  - Input RGB shape:    {rgb_shape}")
-                print(f"  - Pred Depth shape:   {pred_shape}")
-                if gt_shape is not None:
-                    print(f"  - GT Depth shape:     {gt_shape}")
-                else:
-                    print("  - GT Depth shape:     None")
-                print("=" * 60 + "\n")
-                self._shape_printed = True
 
             # ✅ GT depth 통계/히스토그램 (A~D 검증) – supervised_loss 계산 직전에 호출
             try:

@@ -1,7 +1,6 @@
 import os
 import torch
 import torch.nn as nn
-import torch.nn.functional as F  # 🆕 interpolate를 위해 추가
 from torchvision.utils import save_image  # ← 추가
 import json  # ← 추가
 
@@ -30,9 +29,7 @@ class ResNetSAN01(nn.Module):
     """
     def __init__(self, dropout=None, version=None, use_film=False, film_scales=[0],
                  use_enhanced_lidar=False,
-                 min_depth=0.5, max_depth=80.0,
-                 force_output_shape=(),  # 🆕 출력 해상도 강제 옵션 추가
-                 **kwargs):
+                 min_depth=0.5, max_depth=80.0, **kwargs):  # ← 추가 인자 (이름 유지)
         super().__init__()
         
         # 안전 보정
@@ -41,7 +38,6 @@ class ResNetSAN01(nn.Module):
         if max_depth <= min_depth: max_depth = min_depth + 1.0
         self.min_depth = float(min_depth)
         self.max_depth = float(max_depth)
-        self.force_output_shape = force_output_shape  # 🆕 옵션 저장
         
         # 🆕 기존 파라미터만 사용
         use_enhanced_lidar = kwargs.get('use_enhanced_lidar', False)  # 기본값 False로 변경
@@ -294,15 +290,6 @@ class ResNetSAN01(nn.Module):
             ]
         else:
             inv_depths = [disp_to_inv(outputs[("disp", 0)])]
-
-        # 🆕 출력 해상도 강제 (옵션이 설정된 경우)
-        if self.force_output_shape and len(self.force_output_shape) == 2:
-            target_h, target_w = self.force_output_shape
-            # 모든 스케일의 깊이맵을 목표 해상도로 리사이즈
-            inv_depths = [
-                F.interpolate(inv_depth, size=(target_h, target_w), mode='bilinear', align_corners=False)
-                for inv_depth in inv_depths
-            ]
 
         return inv_depths, skip_features
 
