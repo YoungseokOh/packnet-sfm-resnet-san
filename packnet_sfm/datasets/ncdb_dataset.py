@@ -290,17 +290,18 @@ class NcdbDataset(Dataset):
             depth_gt = self._load_depth_png(depth_path)
             
             # ★ 디버깅: 로드한 depth 값 확인 (1회)
-            if depth_gt is not None and not hasattr(self, '_depth_load_logged'):
-                self._depth_load_logged = True
-                print(f"\n[NcdbDataset.__getitem__] Loaded depth from _load_depth_png:")
-                print(f"  Path: {depth_path}")
-                print(f"  Max: {np.max(depth_gt):.2f}")
-                print(f"  Min: {np.min(depth_gt):.2f}")
-                print(f"  Shape: {depth_gt.shape}")
-                valid = depth_gt > 0
-                if valid.any():
-                    print(f"  Valid pixels: {valid.sum()} / {depth_gt.size}")
-                    print(f"  Valid range: [{depth_gt[valid].min():.2f}, {depth_gt[valid].max():.2f}]")
+            if os.environ.get('DEPTH_RANGE_DEBUG', '0') == '1':
+                if depth_gt is not None and not hasattr(self, '_depth_load_logged'):
+                    self._depth_load_logged = True
+                    print(f"\n[NcdbDataset.__getitem__] Loaded depth from _load_depth_png:")
+                    print(f"  Path: {depth_path}")
+                    print(f"  Max: {np.max(depth_gt):.2f}")
+                    print(f"  Min: {np.min(depth_gt):.2f}")
+                    print(f"  Shape: {depth_gt.shape}")
+                    valid = depth_gt > 0
+                    if valid.any():
+                        print(f"  Valid pixels: {valid.sum()} / {depth_gt.size}")
+                        print(f"  Valid range: [{depth_gt[valid].min():.2f}, {depth_gt[valid].max():.2f}]")
 
         # (추가) Depth 통계 계산
         depth_stats = None
@@ -416,29 +417,29 @@ class NcdbDataset(Dataset):
         # Apply transforms
         if self.transform:
             sample = self.transform(sample)
+            if os.environ.get('DEPTH_RANGE_DEBUG', '0') == '1':   
+                # ★ 디버깅: Transform 후 depth 확인
+                if 'depth' in sample and not hasattr(self, '_transform_depth_logged'):
+                    self._transform_depth_logged = True
+                    d = sample['depth']
+                    print(f"\n[NcdbDataset.__getitem__] After transform:")
+                    if isinstance(d, torch.Tensor):
+                        print(f"  Type: torch.Tensor")
+                        print(f"  Shape: {d.shape}")
+                        print(f"  Max: {d.max().item():.2f}")
+                        print(f"  Min: {d.min().item():.2f}")
+                        valid = d > 0
+                        if valid.any():
+                            print(f"  Valid range: [{d[valid].min().item():.2f}, {d[valid].max().item():.2f}]")
+                    elif isinstance(d, np.ndarray):
+                        print(f"  Type: numpy.ndarray")
+                        print(f"  Shape: {d.shape}")
+                        print(f"  Max: {np.max(d):.2f}")
+                        print(f"  Min: {np.min(d):.2f}")
+                        valid = d > 0
+                        if valid.any():
+                            print(f"  Valid range: [{d[valid].min().item():.2f}, {d[valid].max().item():.2f}]")
             
-            # ★ 디버깅: Transform 후 depth 확인
-            if 'depth' in sample and not hasattr(self, '_transform_depth_logged'):
-                self._transform_depth_logged = True
-                d = sample['depth']
-                print(f"\n[NcdbDataset.__getitem__] After transform:")
-                if isinstance(d, torch.Tensor):
-                    print(f"  Type: torch.Tensor")
-                    print(f"  Shape: {d.shape}")
-                    print(f"  Max: {d.max().item():.2f}")
-                    print(f"  Min: {d.min().item():.2f}")
-                    valid = d > 0
-                    if valid.any():
-                        print(f"  Valid range: [{d[valid].min().item():.2f}, {d[valid].max().item():.2f}]")
-                elif isinstance(d, np.ndarray):
-                    print(f"  Type: numpy.ndarray")
-                    print(f"  Shape: {d.shape}")
-                    print(f"  Max: {np.max(d):.2f}")
-                    print(f"  Min: {np.min(d):.2f}")
-                    valid = d > 0
-                    if valid.any():
-                        print(f"  Valid range: [{d[valid].min().item():.2f}, {d[valid].max().item():.2f}]")
-        
         return sample
 
     # ✅ 커스텀 collate_fn 추가: FisheyeCamera를 처리

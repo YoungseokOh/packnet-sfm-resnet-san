@@ -19,9 +19,10 @@ model:
         version: '18A'
         dropout: 0.1
         # 🔧 기존 구조로 설정
-        use_film: true           # 체크포인트와 동일하게
+        use_film: false           # 체크포인트와 동일하게
         film_scales: [0]         # 체크포인트와 동일하게
-        use_enhanced_lidar: true  # ❌ Enhanced 비활성화
+        use_enhanced_lidar: false  # ❌ Enhanced 비활성화
+        force_output_shape: [384, 640]
     params:
         crop: ''
         min_depth: 0.3
@@ -29,26 +30,24 @@ model:
         scale_output: 'top-center'
 
 datasets:
-  augmentation:
-    image_shape: [384, 640]
   train:
     dataset: ['ncdb']
-    path: ['/workspace/data/ncdb-cls-640x384']
+    path: ['/workspace/data/ncdb-cls-1920x1536-img-only']
     split: ['splits/combined_train.json']
-    mask_file: ['binary_bw_640x384_mask.png']
-    use_mask: [true]   # 또는 false (단일 값). 마스크 미적용
+    mask_file: ['binary_mask.png']
+    use_mask: [false]   # 또는 false (단일 값). 마스크 미적용
   validation:
     dataset: ['ncdb']
-    path: ['/workspace/data/ncdb-cls-640x384']
+    path: ['/workspace/data/ncdb-cls-1920x1536-img-only']
     split: ['splits/combined_val.json']
-    mask_file: ['binary_bw_640x384_mask.png']
-    use_mask: [true]
+    mask_file: ['binary_mask.png']
+    use_mask: [false]
   test:
     dataset: ['ncdb']
-    path: ['/workspace/data/ncdb-cls-640x384']
+    path: ['/workspace/data/ncdb-cls-1920x1536-img-only']
     split: ['splits/combined_test.json']
-    mask_file: ['binary_bw_640x384_mask.png']
-    use_mask: [true]
+    mask_file: ['binary_mask.png']
+    use_mask: [false]
 
 # 🆕 중간 평가 설정
 arch:
@@ -61,12 +60,12 @@ arch:
     eval_subset_size: 25
 
 checkpoint:
-    filepath: 'checkpoints/resnetsan01_640x384_new_mask_test_use_film_use_enhanced_lidar/'
+    filepath: 'checkpoints/resnetsan01_img_1920x1536_depth_640x384/'
     save_top_k: -1
     period: 10
 
 save:
-    folder: 'outputs/resnetsan01_640x384_new_mask_test_use_film_use_enhanced_lidar/'
+    folder: 'outputs/resnetsan01_img_1920x1536_depth_640x384/'
 
 tensorboard:
     dry_run: false

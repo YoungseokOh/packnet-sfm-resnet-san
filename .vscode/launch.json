@@ -84,25 +84,25 @@
         // },
 
         {
-        "name": "Train ONE STEP (ENC ×256)",
+        "name": "Run Anything",
         "type": "debugpy",
         "request": "launch",
-        // "program": "${workspaceFolder}/scripts/train.py",
-        "program": "${workspaceFolder}/scripts/eval.py",
+        "program": "${workspaceFolder}/scripts/train.py",
+        // "program": "${workspaceFolder}/scripts/eval.py",
         // "program": "${workspaceFolder}/scripts/infer_ncdb.py",
         "console": "integratedTerminal",
         "cwd": "${workspaceFolder}",
         // Training
-        // "args": ["configs/train_resnet_san_ncdb_640x384.yaml"],
+        "args": ["configs/train_resnet_san_ncdb_640x384.yaml"],
         // "args": ["configs/train_resnet_san_ncdb.yaml"],
         // Evaliation
-        "args": 
-            [
-                "--checkpoint",
-                "ResNet-SAN_epoch=49_ncdb-cls-640x384.ckpt",
-                "--config", 
-                "configs/train_resnet_san_ncdb_640x384.yaml"
-            ],
+        // "args": 
+        //     [
+        //         "--checkpoint",
+        //         "ResNet-SAN_epoch=49_ncdb-cls-640x384.ckpt",
+        //         "--config", 
+        //         "configs/train_resnet_san_ncdb_640x384.yaml"
+        //     ],
 
         // Inference
         // "args":
@@ -134,7 +134,7 @@
             "SSI_SILOG_VERBOSE":"0",
             "SAN01_INV_MODE":"bounded",
             "SAN01_INV_SPACE":"log",
-            "DEPTH_RANGE_DEBUG": "1" // ✅ 추가
+            "DEPTH_RANGE_DEBUG": "0" // ✅ 추가
             }
         },
 

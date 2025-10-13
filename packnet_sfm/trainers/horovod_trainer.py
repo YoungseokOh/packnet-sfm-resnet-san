@@ -149,7 +149,8 @@ class HorovodTrainer(BaseTrainer):
                 eval_type = "RGB+LiDAR" if input_depth_type else "RGB-only"
                 
                 # 빠른 평가 수행
-                metrics = self._evaluate_single_dataloader(module, dataloader, eval_size, eval_type)
+                # ❗ BUG FIX: dataloader index 'i'를 전달하여 올바른 평가 모드를 사용하도록 수정
+                metrics = self._evaluate_single_dataloader(module, dataloader, eval_size, eval_type, i)
                 
                 # 결과 저장
                 if eval_type == "RGB-only":
@@ -167,7 +168,7 @@ class HorovodTrainer(BaseTrainer):
         finally:
             module.train()
 
-    def _evaluate_single_dataloader(self, module, dataloader, eval_size, mode_name):
+    def _evaluate_single_dataloader(self, module, dataloader, eval_size, mode_name, dataloader_idx):
         """단일 데이터로더 평가 - 간소화된 버전"""
         metrics = []
         
@@ -191,7 +192,8 @@ class HorovodTrainer(BaseTrainer):
                         print(f"     RGB-only mode")
                 
                 # validation_step 실행
-                output = module.validation_step(batch, i, 0)
+                # ❗ BUG FIX: 올바른 dataloader_idx를 전달
+                output = module.validation_step(batch, i, dataloader_idx)
                 
                 # 메트릭 추출 (depth_gt의 첫 번째 값이 abs_rel)
                 if isinstance(output, dict) and 'depth_gt' in output:

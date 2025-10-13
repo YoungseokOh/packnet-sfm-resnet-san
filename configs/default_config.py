@@ -48,6 +48,7 @@ cfg.model.depth_net.name = ''               # Depth network name
 cfg.model.depth_net.checkpoint_path = ''    # Depth checkpoint filepath
 cfg.model.depth_net.version = ''            # Depth network version
 cfg.model.depth_net.dropout = 0.0           # Depth network dropout
+cfg.model.depth_net.force_output_shape = () # 🆕 출력 해상도 강제. 예: (384, 640)
 
 # 🆕 SAN 관련 설정 추가 (기존 네트워크와 호환)
 cfg.model.depth_net.use_film = False        # Enable Depth-aware FiLM
@@ -155,7 +156,7 @@ cfg.datasets.augmentation.cutmix.prob = 0.5                     # Probability of
 ### DATASETS.TRAIN
 ########################################################################################################################
 cfg.datasets.train = CN()
-cfg.datasets.train.batch_size = 8                   # Training batch size
+cfg.datasets.train.batch_size = 2                   # Training batch size
 cfg.datasets.train.num_workers = 16                 # Training number of workers
 cfg.datasets.train.back_context = 1                 # Training backward context
 cfg.datasets.train.forward_context = 1              # Training forward context
@@ -212,6 +213,7 @@ cfg.checkpoint.save_top_k = 5           # Number of best models to save
 cfg.checkpoint.monitor = 'loss'         # Metric to monitor for logging
 cfg.checkpoint.monitor_index = 0        # Dataset index for the metric to monitor
 cfg.checkpoint.mode = 'auto'            # Automatically determine direction of improvement (increase or decrease)
+cfg.checkpoint.period = 1               # Save checkpoint every N epochs
 cfg.checkpoint.s3_path = ''             # s3 path for AWS model syncing
 cfg.checkpoint.s3_frequency = 1         # How often to s3 sync
 

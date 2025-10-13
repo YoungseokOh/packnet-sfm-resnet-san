@@ -561,22 +561,6 @@ class ModelWrapper(torch.nn.Module):
         """
         Evaluate batch to produce depth metrics.
         """
-        
-        # ★ 디버깅: batch['depth']가 들어올 때 값 확인
-        if 'depth' in batch and batch['depth'] is not None:
-            raw_depth = batch['depth']
-            if hasattr(raw_depth, 'max'):
-                max_val = float(raw_depth.max())
-                if not hasattr(self, '_batch_depth_logged'):
-                    self._batch_depth_logged = True
-                    print(f"\n[evaluate_depth] Incoming batch['depth']:")
-                    print(f"  Type: {type(raw_depth)}")
-                    print(f"  Shape: {raw_depth.shape if hasattr(raw_depth, 'shape') else 'N/A'}")
-                    print(f"  Max value: {max_val:.2f}")
-                    print(f"  Min value: {float(raw_depth.min()):.2f}")
-                    if max_val > 500:
-                        print(f"  ⚠️ WARNING: Max > 500, seems like 256x scaled!")
-        
         # Get predicted inv-depths
         inv_depths = self.model(batch)['inv_depths']         # list, first scale: (B,1,H,W)
         inv0 = inv_depths[0]
@@ -828,18 +812,9 @@ def setup_model(config, prepared, **kwargs):
     model = load_class(config.name, paths=['packnet_sfm.models',])(
         **{**model_args, **kwargs})
 
-    # 기존 네트워크 추가 로직 그대로 + depth_net에 model.params의 min/max 전달
+    # 기존 네트워크 추가 로직 그대로
     if 'depth_net' in model.network_requirements:
-        depth_extra = {}
-        try:
-            if hasattr(config, 'params'):
-                if hasattr(config.params, 'min_depth'):
-                    depth_extra['min_depth'] = float(config.params.min_depth)
-                if hasattr(config.params, 'max_depth'):
-                    depth_extra['max_depth'] = float(config.params.max_depth)
-        except Exception:
-            pass
-        model.add_depth_net(setup_depth_net(config.depth_net, prepared, **depth_extra))
+        model.add_depth_net(setup_depth_net(config.depth_net, prepared))
     if 'pose_net' in model.network_requirements:
         model.add_pose_net(setup_pose_net(config.pose_net, prepared))
     if not prepared and config.checkpoint_path != '':
