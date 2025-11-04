@@ -12,6 +12,7 @@ from torch.utils.data import ConcatDataset, DataLoader, Subset
 
 from packnet_sfm.datasets.transforms import get_transforms
 from packnet_sfm.utils.depth import inv2depth, post_process_inv_depth, compute_depth_metrics, viz_inv_depth
+from packnet_sfm.utils.post_process_depth import sigmoid_to_depth_linear, sigmoid_to_depth_log
 from packnet_sfm.utils.horovod import print0, world_size, rank, on_rank_0
 from packnet_sfm.utils.image import flip_lr
 from packnet_sfm.utils.load import load_class, load_class_args_create, \
@@ -57,7 +58,8 @@ class ModelWrapper(torch.nn.Module):
         # Task metrics
         self.metrics_name = 'depth'
         self.metrics_keys = ('abs_rel', 'sqr_rel', 'rmse', 'rmse_log', 'a1', 'a2', 'a3')
-        self.metrics_modes = ('', '_pp', '_gt', '_pp_gt')
+        # 🆕 Support both LINEAR and LOG transformations for comparison
+        self.metrics_modes = ('_lin', '_lin_gt', '_log', '_log_gt')
 
         # Model, optimizers, schedulers and datasets are None for now
         self.model = self.optimizer = self.scheduler = None
@@ -189,6 +191,27 @@ class ModelWrapper(torch.nn.Module):
                 'params': self.pose_net.parameters(),
                 **filter_args(optimizer, self.config.model.optimizer.pose)
             })
+        
+        # 🆕 CRITICAL: Loss parameters (learnable uncertainty weights)
+        # For adaptive multi-domain loss with uncertainty-based weighting
+        if hasattr(self.model, '_supervised_loss'):
+            sup_loss = self.model._supervised_loss
+            if hasattr(sup_loss, 'loss_func') and isinstance(sup_loss.loss_func, torch.nn.Module):
+                loss_params = list(sup_loss.loss_func.parameters())
+                if loss_params:
+                    # 🔥 Use 10x higher learning rate for loss parameters
+                    # Loss parameters need faster adaptation than depth network
+                    base_lr = self.config.model.optimizer.depth.get('lr', 1e-4)
+                    loss_lr = base_lr * 10.0  # 10x higher LR for uncertainty parameters
+                    
+                    params.append({
+                        'name': 'Loss',
+                        'params': loss_params,
+                        'lr': loss_lr,
+                        'weight_decay': 0.0,  # No weight decay for uncertainty parameters
+                    })
+                    print(f"✅ Registered {len(loss_params)} learnable loss parameters (LR: {loss_lr:.6f})")
+        
         # Create optimizer with parameters
         optimizer = optimizer(params)
 
@@ -571,9 +594,14 @@ class ModelWrapper(torch.nn.Module):
     def evaluate_depth(self, batch):
         """
         Evaluate batch to produce depth metrics.
+        
+        🆕 Post-Processing Evaluation with Log Space Support:
+        - Model outputs sigmoid [0, 1]
+        - Apply transformation matching training (LINEAR or LOG space)
+        - Compute metrics with same transformation used in training
         """
         
-        # ★ 디버깅: batch['depth']가 들어올 때 값 확인
+        # ★ STEP 1: Debug logging (optional)
         if 'depth' in batch and batch['depth'] is not None:
             raw_depth = batch['depth']
             if hasattr(raw_depth, 'max'):
@@ -588,26 +616,34 @@ class ModelWrapper(torch.nn.Module):
                     if max_val > 500:
                         print(f"  ⚠️ WARNING: Max > 500, seems like 256x scaled!")
         
-        # Get predicted inv-depths
-        inv_depths = self.model(batch)['inv_depths']         # list, first scale: (B,1,H,W)
-        inv0 = inv_depths[0]
-        depth = inv2depth(inv0)                              # (B,1,H,W)
-
-        # Always do flip post-process for validation/test
-        # 1) flip input
-        batch['rgb'] = flip_lr(batch['rgb'])
-        # 2) predict on flipped input
-        inv_depths_flipped = self.model(batch)['inv_depths']
-        # 3) flip prediction back to original coordinates
-        inv0_flipped_back = flip_lr(inv_depths_flipped[0])
-        # 4) post-process combine
-        inv_depth_pp = post_process_inv_depth(inv0, inv0_flipped_back, method='mean')
-        depth_pp = inv2depth(inv_depth_pp)
-        # 5) restore input
-        batch['rgb'] = flip_lr(batch['rgb'])
-
-        # Normalize to (B,1,H,W) on correct device
-        device = inv0.device
+        # ★ STEP 2: Model forward → sigmoid outputs [0, 1]
+        sigmoid_outputs = self.model(batch)['inv_depths']  # list, first scale: (B,1,H,W)
+        sigmoid0 = sigmoid_outputs[0]  # (B,1,H,W) with values in [0, 1]
+        
+        # ★ STEP 3: Get depth range from config
+        min_depth = float(self.config.model.params.min_depth)
+        max_depth = float(self.config.model.params.max_depth)
+        
+        # ★ STEP 3.5: Get log space setting from model
+        use_log_space = getattr(self.model, 'use_log_space', False)
+        
+        # ★ STEP 4: Convert sigmoid to bounded inverse depth (CRITICAL!)
+        # This must match the training-time conversion!
+        from packnet_sfm.utils.post_process_depth import sigmoid_to_inv_depth
+        inv_depth = sigmoid_to_inv_depth(sigmoid0, min_depth, max_depth, use_log_space=use_log_space)
+        
+        # ★ STEP 5: Convert inverse depth to depth (same as original code)
+        from packnet_sfm.utils.depth import inv2depth
+        depth_pred = inv2depth(inv_depth)
+        
+        # ★ STEP 6: Also compute with both Linear and Log transformations for comparison
+        # Linear: matches linear training
+        # Log: matches log training
+        depth_linear = sigmoid_to_depth_linear(sigmoid0, min_depth, max_depth)
+        depth_log = sigmoid_to_depth_log(sigmoid0, min_depth, max_depth)
+        
+        # ★ STEP 5: Normalize GT depth to (B,1,H,W) on correct device
+        device = sigmoid0.device
         def _to_b1hw(x):
             if x is None:
                 return None
@@ -631,61 +667,88 @@ class ModelWrapper(torch.nn.Module):
                     return x[:, :1, ...]
                 return x
             return None
-
-        depth_pred    = _to_b1hw(depth)
-        depth_pred_pp = _to_b1hw(depth_pp)
-        depth_gt      = _to_b1hw(batch.get('depth', None))
-
-        # 🔧 임시 스케일 보정: 환경변수 FORCE_DEPTH_DIV256=1일 때 Pred 256으로 나눔
+        
+        depth_gt = _to_b1hw(batch.get('depth', None))
+        
+        # ★ STEP 6: Apply scale correction if needed (환경변수)
         if os.environ.get('FORCE_DEPTH_DIV256', '0') == '1':
             def _div256(x):
                 if x is None:
                     return x
-                # 값이 이미 물리 단위(최대 < 200 등)면 중복 나눔 피함
                 if torch.is_tensor(x) and x.max() > 255:
                     return x / 256.0
                 return x
-            depth_gt      = _div256(depth_gt)
-            depth_pred    = _div256(depth_pred)
-            depth_pred_pp = _div256(depth_pred_pp)
-
-
-        # Compute metrics (tensor of 7 values each)
+            depth_gt = _div256(depth_gt)
+            depth_linear = _div256(depth_linear)
+            depth_log = _div256(depth_log)
+        
+        # ★ STEP 7: Compute metrics (Main, Linear & Log, with/without GT scale)
+        # Main uses the training transformation (linear or log depending on use_log_space)
         metrics = OrderedDict()
-        if depth_gt is not None and depth_pred is not None:
+        if depth_gt is not None:
+            # Main metric (sigmoid → bounded inv_depth → depth)
             try:
-                m_main = compute_depth_metrics(self.config.model.params, gt=depth_gt, pred=depth_pred, use_gt_scale=False)
+                m_main = compute_depth_metrics(
+                    self.config.model.params, gt=depth_gt, pred=depth_pred, use_gt_scale=False)
             except Exception:
                 m_main = self._compute_depth_metrics_fallback(depth_gt, depth_pred)
             metrics['depth'] = m_main
-
+            
             try:
-                m_pp = compute_depth_metrics(self.config.model.params, gt=depth_gt, pred=depth_pred_pp, use_gt_scale=False)
+                m_main_gt = compute_depth_metrics(
+                    self.config.model.params, gt=depth_gt, pred=depth_pred, use_gt_scale=True)
             except Exception:
-                m_pp = self._compute_depth_metrics_fallback(depth_gt, depth_pred_pp)
-            metrics['depth_pp'] = m_pp
-
+                m_main_gt = self._compute_depth_metrics_fallback(depth_gt, depth_pred)
+            metrics['depth_gt'] = m_main_gt
+            
+            # Linear transformation metrics
             try:
-                m_gt = compute_depth_metrics(self.config.model.params, gt=depth_gt, pred=depth_pred, use_gt_scale=True)
+                m_linear = compute_depth_metrics(
+                    self.config.model.params, gt=depth_gt, pred=depth_linear, use_gt_scale=False)
             except Exception:
-                m_gt = self._compute_depth_metrics_fallback(depth_gt, depth_pred)
-            metrics['depth_gt'] = m_gt
-
+                m_linear = self._compute_depth_metrics_fallback(depth_gt, depth_linear)
+            metrics['depth_lin'] = m_linear
+            
             try:
-                m_pp_gt = compute_depth_metrics(self.config.model.params, gt=depth_gt, pred=depth_pred_pp, use_gt_scale=True)
+                m_linear_gt = compute_depth_metrics(
+                    self.config.model.params, gt=depth_gt, pred=depth_linear, use_gt_scale=True)
             except Exception:
-                m_pp_gt = self._compute_depth_metrics_fallback(depth_gt, depth_pred_pp)
-            metrics['depth_pp_gt'] = m_pp_gt
-
+                m_linear_gt = self._compute_depth_metrics_fallback(depth_gt, depth_linear)
+            metrics['depth_lin_gt'] = m_linear_gt
+            
+            # Log transformation metrics
+            try:
+                m_log = compute_depth_metrics(
+                    self.config.model.params, gt=depth_gt, pred=depth_log, use_gt_scale=False)
+            except Exception:
+                m_log = self._compute_depth_metrics_fallback(depth_gt, depth_log)
+            metrics['depth_log'] = m_log
+            
+            try:
+                m_log_gt = compute_depth_metrics(
+                    self.config.model.params, gt=depth_gt, pred=depth_log, use_gt_scale=True)
+            except Exception:
+                m_log_gt = self._compute_depth_metrics_fallback(depth_gt, depth_log)
+            metrics['depth_log_gt'] = m_log_gt
+        
+        # ★ STEP 8: Return metrics and outputs
         return {
             'metrics': metrics,
-            'inv_depth': inv_depth_pp
+            'inv_depth': inv_depth,  # For visualization (bounded inverse depth)
+            'depth': depth_pred,  # Main depth (for saving/analysis)
+            'depth_linear': depth_linear,  # For comparison
+            'depth_log': depth_log  # For comparison
         }
 
     @on_rank_0
     def print_metrics(self, metrics_data, dataset):
         """
-        Print depth metrics on rank 0 if available
+        Print depth metrics on rank 0 if available.
+        
+        🆕 Updated for Post-Processing Evaluation:
+        - Displays Linear transformation metrics
+        - 2 metrics: depth_lin, depth_lin_gt
+        - LOG transformation removed (incompatible with inverse-depth training)
         """
         if not metrics_data[0]:
             return
@@ -715,26 +778,85 @@ class ModelWrapper(torch.nn.Module):
             print(par_line)
             print(hor_line)
 
+        # Print header
         print(met_line.format(*(('METRIC',) + self.metrics_keys)))
+        
         for n, metrics in enumerate(metrics_data):
             print(hor_line)
             path_line = '{}'.format(
                 os.path.join(dataset.path[n], dataset.split[n]))
-            if len(dataset.cameras[n]) == 1: # only allows single cameras
+            if len(dataset.cameras[n]) == 1:  # only allows single cameras
                 path_line += ' ({})'.format(dataset.cameras[n][0])
             print(wrap(pcolor('*** {:<87}'.format(path_line), 'magenta', attrs=['bold'])))
             print(hor_line)
-            for key, metric in metrics.items():
-                if self.metrics_name in key:
+            
+            # 🆕 Print Main metric (sigmoid → bounded inv → depth)
+            main_keys = ['depth', 'depth_gt']
+            main_metrics_exist = any(k in metrics for k in main_keys)
+            
+            if main_metrics_exist:
+                print(wrap(pcolor('{:^91}'.format('MAIN (BOUNDED INVERSE DEPTH)'), 'cyan', attrs=['bold'])))
+                print(hor_line)
+                
+                for key in main_keys:
+                    if key in metrics:
+                        metric = metrics[key]
+                        print(wrap(pcolor(num_line.format(
+                            *((key.upper(),) + tuple(metric.tolist()))), 'cyan')))
+                
+                print(hor_line)
+            
+            # 🆕 Print Linear transformation metrics
+            linear_keys = ['depth_lin', 'depth_lin_gt']
+            linear_metrics_exist = any(k in metrics for k in linear_keys)
+            
+            if linear_metrics_exist:
+                print(wrap(pcolor('{:^91}'.format('LINEAR TRANSFORMATION'), 'yellow', attrs=['bold'])))
+                print(hor_line)
+                
+                for key in linear_keys:
+                    if key in metrics:
+                        metric = metrics[key]
+                        print(wrap(pcolor(num_line.format(
+                            *((key.upper(),) + tuple(metric.tolist()))), 'cyan')))
+                
+                print(hor_line)
+            
+            # 🆕 Print Log transformation metrics
+            log_keys = ['depth_log', 'depth_log_gt']
+            log_metrics_exist = any(k in metrics for k in log_keys)
+            
+            if log_metrics_exist:
+                print(wrap(pcolor('{:^91}'.format('LOG TRANSFORMATION'), 'green', attrs=['bold'])))
+                print(hor_line)
+                
+                for key in log_keys:
+                    if key in metrics:
+                        metric = metrics[key]
+                        print(wrap(pcolor(num_line.format(
+                            *((key.upper(),) + tuple(metric.tolist()))), 'cyan')))
+                
+                print(hor_line)
+            
+            # Fallback: print any other metrics (backward compatibility)
+            other_keys = [k for k in metrics.keys() 
+                         if k not in main_keys + linear_keys + log_keys and self.metrics_name in k]
+            if other_keys:
+                print(wrap(pcolor('{:^91}'.format('OTHER METRICS'), 'white', attrs=['bold'])))
+                print(hor_line)
+                for key in other_keys:
+                    metric = metrics[key]
                     print(wrap(pcolor(num_line.format(
                         *((key.upper(),) + tuple(metric.tolist()))), 'cyan')))
+                print(hor_line)
+        
         print(hor_line)
 
         if self.loggers:
             # Find WandbLogger if it exists in the list of loggers
             wandb_logger = None
             for logger in self.loggers:
-                if hasattr(logger, 'run_name') and hasattr(logger, 'run_url'): # Check for WandbLogger specific attributes
+                if hasattr(logger, 'run_name') and hasattr(logger, 'run_url'):  # Check for WandbLogger specific attributes
                     wandb_logger = logger
                     break
             
@@ -813,6 +935,8 @@ def setup_model(config, prepared, **kwargs):
                 model_args['min_depth'] = float(config.params.min_depth)
             if hasattr(config.params, 'max_depth'):
                 model_args['max_depth'] = float(config.params.max_depth)
+            if hasattr(config.params, 'use_log_space'):
+                model_args['use_log_space'] = bool(config.params.use_log_space)
     except Exception:
         pass
 

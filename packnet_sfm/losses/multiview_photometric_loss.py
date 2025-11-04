@@ -7,6 +7,7 @@ from packnet_sfm.utils.image import match_scales
 from packnet_sfm.geometry.camera import FisheyeCamera # Changed from Camera to FisheyeCamera
 from packnet_sfm.geometry.camera_utils import view_synthesis
 from packnet_sfm.utils.depth import calc_smoothness, inv2depth
+from packnet_sfm.utils.post_process_depth import sigmoid_to_depth_linear  # 🆕 For sigmoid → depth conversion
 from packnet_sfm.losses.loss_base import LossBase, ProgressiveScaling
 
 ########################################################################################################################
@@ -91,7 +92,7 @@ class MultiViewPhotometricLoss(LossBase):
     def __init__(self, num_scales=4, ssim_loss_weight=0.85, occ_reg_weight=0.1, smooth_loss_weight=0.1,
                  C1=1e-4, C2=9e-4, photometric_reduce_op='mean', disp_norm=True, clip_loss=0.5,
                  progressive_scaling=0.0, padding_mode='zeros',
-                 automask_loss=False, **kwargs):
+                 automask_loss=False, min_depth=0.05, max_depth=80.0, **kwargs):
         super().__init__()
         self.n = num_scales
         self.progressive_scaling = progressive_scaling
@@ -105,6 +106,9 @@ class MultiViewPhotometricLoss(LossBase):
         self.clip_loss = clip_loss
         self.padding_mode = padding_mode
         self.automask_loss = automask_loss
+        # 🆕 Store depth range for sigmoid → depth conversion
+        self.min_depth = min_depth
+        self.max_depth = max_depth
         self.progressive_scaling = ProgressiveScaling(
             progressive_scaling, self.n)
 
@@ -336,7 +340,7 @@ class MultiViewPhotometricLoss(LossBase):
         context : list of torch.Tensor [B,3,H,W]
             Context containing a list of reference images
         inv_depths : list of torch.Tensor [B,1,H,W]
-            Predicted depth maps for the original image, in all scales
+            🆕 Now receives sigmoid outputs [0, 1] for all scales (not actual inv_depths!)
         intrinsics : dict
             Original camera intrinsics (FisheyeCamera format)
         ref_intrinsics : dict
@@ -355,6 +359,15 @@ class MultiViewPhotometricLoss(LossBase):
         losses_and_metrics : dict
             Output dictionary
         """
+        # 🆕 Convert sigmoid outputs to depth using Linear transformation
+        # inv_depths are actually sigmoid outputs [0, 1] now
+        sigmoid_outputs = inv_depths
+        depths = [sigmoid_to_depth_linear(sigmoid_outputs[i], self.min_depth, self.max_depth) 
+                  for i in range(len(sigmoid_outputs))]
+        
+        # Convert depth back to inv_depth for view synthesis (required by existing code)
+        inv_depths = [1.0 / (depths[i] + 1e-8) for i in range(len(depths))]
+        
         # If using progressive scaling
         self.n = self.progressive_scaling(progress)
         # Loop over all reference images
@@ -387,8 +400,9 @@ class MultiViewPhotometricLoss(LossBase):
         # Calculate reduced photometric loss
         loss = self.reduce_photometric_loss(photometric_losses)
         # Include smoothness loss if requested
+        # 🆕 Use sigmoid outputs for smoothness (edge-aware smoothness in sigmoid space)
         if self.smooth_loss_weight > 0.0:
-            loss += self.calc_smoothness_loss(inv_depths, images)
+            loss += self.calc_smoothness_loss(sigmoid_outputs, images)
         # Return losses and metrics
         return {
             'loss': loss.unsqueeze(0),

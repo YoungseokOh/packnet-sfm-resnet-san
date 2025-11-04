@@ -295,6 +295,7 @@ class NcdbDataset(Dataset):
         image = load_image(str(image_path))
         W, H = image.size
         depth_gt = None
+        
         if self.with_depth and depth_path is not None:
             depth_gt = self._load_depth_png(depth_path)
             
@@ -307,7 +308,6 @@ class NcdbDataset(Dataset):
                 
                 if self.max_depth is not None:
                     depth_gt[depth_gt > self.max_depth] = 0
-                
                 
         # (추가) Depth 통계 계산
         depth_stats = None
@@ -418,27 +418,27 @@ class NcdbDataset(Dataset):
         if self.transform:
             sample = self.transform(sample)
             
-            # ★ 디버깅: Transform 후 depth 확인
-            if 'depth' in sample and not hasattr(self, '_transform_depth_logged'):
-                self._transform_depth_logged = True
-                d = sample['depth']
-                print(f"\n[NcdbDataset.__getitem__] After transform:")
-                if isinstance(d, torch.Tensor):
-                    print(f"  Type: torch.Tensor")
-                    print(f"  Shape: {d.shape}")
-                    print(f"  Max: {d.max().item():.2f}")
-                    print(f"  Min: {d.min().item():.2f}")
-                    valid = d > 0
-                    if valid.any():
-                        print(f"  Valid range: [{d[valid].min().item():.2f}, {d[valid].max().item():.2f}]")
-                elif isinstance(d, np.ndarray):
-                    print(f"  Type: numpy.ndarray")
-                    print(f"  Shape: {d.shape}")
-                    print(f"  Max: {np.max(d):.2f}")
-                    print(f"  Min: {np.min(d):.2f}")
-                    valid = d > 0
-                    if valid.any():
-                        print(f"  Valid range: [{d[valid].min().item():.2f}, {d[valid].max().item():.2f}]")
+            # # ★ 디버깅: Transform 후 depth 확인
+            # if 'depth' in sample and not hasattr(self, '_transform_depth_logged'):
+            #     self._transform_depth_logged = True
+            #     d = sample['depth']
+            #     print(f"\n[NcdbDataset.__getitem__] After transform:")
+            #     if isinstance(d, torch.Tensor):
+            #         print(f"  Type: torch.Tensor")
+            #         print(f"  Shape: {d.shape}")
+            #         print(f"  Max: {d.max().item():.2f}")
+            #         print(f"  Min: {d.min().item():.2f}")
+            #         valid = d > 0
+            #         if valid.any():
+            #             print(f"  Valid range: [{d[valid].min().item():.2f}, {d[valid].max().item():.2f}]")
+            #     elif isinstance(d, np.ndarray):
+            #         print(f"  Type: numpy.ndarray")
+            #         print(f"  Shape: {d.shape}")
+            #         print(f"  Max: {np.max(d):.2f}")
+            #         print(f"  Min: {np.min(d):.2f}")
+            #         valid = d > 0
+            #         if valid.any():
+            #             print(f"  Valid range: [{d[valid].min().item():.2f}, {d[valid].max().item():.2f}]")
         
         return sample
 

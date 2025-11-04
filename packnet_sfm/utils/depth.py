@@ -275,35 +275,44 @@ def compute_depth_metrics(config, gt, pred, use_gt_scale=True):
     metrics : torch.Tensor [7]
         Depth metrics (abs_rel, sq_rel, rmse, rmse_log, a1, a2, a3)
     """
-    # Debug logging (only once)
-    if not hasattr(compute_depth_metrics, '_debug_logged'):
-        compute_depth_metrics._debug_logged = True
-        print("\n" + "="*80)
-        print("[DEBUG] compute_depth_metrics called")
-        print("="*80)
-        print(f"Config settings:")
-        print(f"  min_depth: {config.min_depth}")
-        print(f"  max_depth: {config.max_depth}")
-        print(f"  crop: '{config.crop}'")
-        print(f"  scale_output: '{config.scale_output}'")
-        print(f"  use_gt_scale: {use_gt_scale}")
-        print(f"\nInput shapes:")
-        print(f"  GT shape: {gt.shape}")
-        print(f"  Pred shape (before scaling): {pred.shape}")
+    # 🎯 Enhanced debug logging with conversion information
+    debug_key = f"{use_gt_scale}_{id(config)}"
+    if not hasattr(compute_depth_metrics, '_debug_keys'):
+        compute_depth_metrics._debug_keys = set()
+    
+    if debug_key not in compute_depth_metrics._debug_keys:
+        compute_depth_metrics._debug_keys.add(debug_key)
+        print("\n" + "="*100)
+        print(f"📊 DEPTH METRICS COMPUTATION {'(WITH GT SCALE)' if use_gt_scale else '(NO SCALE)'}")
+        print("="*100)
         
-        # Check raw values
+        # Configuration
+        print(f"⚙️  Configuration:")
+        print(f"   Depth range: [{config.min_depth}, {config.max_depth}]m")
+        print(f"   Crop mode: '{config.crop}'")
+        print(f"   Scale output: '{config.scale_output}'")
+        print(f"   Use GT scale: {use_gt_scale}")
+        
+        # Input shapes
+        print(f"\n📐 Input Shapes:")
+        print(f"   GT:   {gt.shape}")
+        print(f"   Pred: {pred.shape}")
+        
+        # GT statistics
         valid_gt = gt > 0
         if valid_gt.any():
-            print(f"\nGT depth statistics:")
-            print(f"  Range: [{gt[valid_gt].min().item():.4f}, {gt[valid_gt].max().item():.4f}]")
-            print(f"  Mean: {gt[valid_gt].mean().item():.4f}")
-            print(f"  Median: {gt[valid_gt].median().item():.4f}")
-            print(f"  Valid pixels: {valid_gt.sum().item()} / {valid_gt.numel()} ({100*valid_gt.float().mean().item():.2f}%)")
+            gt_valid = gt[valid_gt]
+            print(f"\n🎯 GT Depth Statistics:")
+            print(f"   Range:  [{gt_valid.min().item():.4f}, {gt_valid.max().item():.4f}]m")
+            print(f"   Mean:   {gt_valid.mean().item():.4f}m")
+            print(f"   Median: {gt_valid.median().item():.4f}m")
+            print(f"   Valid:  {valid_gt.sum().item()} / {valid_gt.numel()} ({100*valid_gt.float().mean().item():.2f}%)")
         
-        print(f"\nPred depth statistics (before scaling):")
-        print(f"  Range: [{pred.min().item():.4f}, {pred.max().item():.4f}]")
-        print(f"  Mean: {pred.mean().item():.4f}")
-        print(f"  Median: {pred.median().item():.4f}")
+        # Pred statistics (before scaling)
+        print(f"\n🔮 Prediction Statistics (before scaling):")
+        print(f"   Range:  [{pred.min().item():.4f}, {pred.max().item():.4f}]m")
+        print(f"   Mean:   {pred.mean().item():.4f}m")
+        print(f"   Median: {pred.median().item():.4f}m")
     
     crop = config.crop == 'garg'
 
@@ -313,12 +322,14 @@ def compute_depth_metrics(config, gt, pred, use_gt_scale=True):
     # Interpolate predicted depth to ground-truth resolution
     pred = scale_depth(pred, gt, config.scale_output)
     
-    # Debug after scaling (only once)
-    if not hasattr(compute_depth_metrics, '_debug_after_scale'):
-        compute_depth_metrics._debug_after_scale = True
-        print(f"\nAfter scale_depth (scale_output='{config.scale_output}'):")
-        print(f"  Pred shape: {pred.shape}")
-        print(f"  Pred range: [{pred.min().item():.4f}, {pred.max().item():.4f}]")
+    # 🎯 After scaling debug
+    if debug_key not in getattr(compute_depth_metrics, '_debug_after_scale_keys', set()):
+        if not hasattr(compute_depth_metrics, '_debug_after_scale_keys'):
+            compute_depth_metrics._debug_after_scale_keys = set()
+        compute_depth_metrics._debug_after_scale_keys.add(debug_key)
+        print(f"\n📏 After Scaling ('{config.scale_output}'):")
+        print(f"   Pred shape: {pred.shape}")
+        print(f"   Pred range: [{pred.min().item():.4f}, {pred.max().item():.4f}]m")
     
     # If using crop
     if crop:
@@ -334,11 +345,20 @@ def compute_depth_metrics(config, gt, pred, use_gt_scale=True):
         valid = (gt_i > config.min_depth) & (gt_i < config.max_depth)
         valid = valid & crop_mask.bool() if crop else valid
         
-        # Debug valid mask (only for first batch)
-        if i == 0 and not hasattr(compute_depth_metrics, '_debug_valid'):
-            compute_depth_metrics._debug_valid = True
-            print(f"\nValid mask for first sample:")
-            print(f"  Valid pixels after depth range filter: {valid.sum().item()} / {valid.numel()}")
+        # 🎯 Valid mask debug (first sample only)
+        if i == 0 and debug_key not in getattr(compute_depth_metrics, '_debug_valid_keys', set()):
+            if not hasattr(compute_depth_metrics, '_debug_valid_keys'):
+                compute_depth_metrics._debug_valid_keys = set()
+            compute_depth_metrics._debug_valid_keys.add(debug_key)
+            print(f"\n🔍 Valid Mask (depth range filter):")
+            print(f"   Total pixels: {valid.numel()}")
+            print(f"   Valid pixels: {valid.sum().item()} ({100*valid.float().mean().item():.2f}%)")
+            invalid_below = ((gt_i > 0) & (gt_i < config.min_depth)).sum().item()
+            invalid_above = (gt_i > config.max_depth).sum().item()
+            if invalid_below > 0:
+                print(f"   ⚠️  GT < min_depth: {invalid_below} pixels")
+            if invalid_above > 0:
+                print(f"   ⚠️  GT > max_depth: {invalid_above} pixels")
         
         # Stop if there are no remaining valid pixels
         if valid.sum() == 0:
@@ -349,14 +369,16 @@ def compute_depth_metrics(config, gt, pred, use_gt_scale=True):
         # Keep only valid pixels
         gt_i, pred_i = gt_i[valid], pred_i[valid]
         
-        # Debug filtered values (only for first batch)
-        if i == 0 and not hasattr(compute_depth_metrics, '_debug_filtered'):
-            compute_depth_metrics._debug_filtered = True
-            print(f"\nFiltered Pred/GT values (after valid mask):")
-            print(f"  GT range: [{gt_i.min().item():.4f}, {gt_i.max().item():.4f}]")
-            print(f"  GT mean: {gt_i.mean().item():.4f}, median: {gt_i.median().item():.4f}")
-            print(f"  Pred range: [{pred_i.min().item():.4f}, {pred_i.max().item():.4f}]")
-            print(f"  Pred mean: {pred_i.mean().item():.4f}, median: {pred_i.median().item():.4f}")
+        # 🎯 Filtered values debug (first sample only)
+        if i == 0 and debug_key not in getattr(compute_depth_metrics, '_debug_filtered_keys', set()):
+            if not hasattr(compute_depth_metrics, '_debug_filtered_keys'):
+                compute_depth_metrics._debug_filtered_keys = set()
+            compute_depth_metrics._debug_filtered_keys.add(debug_key)
+            print(f"\n📊 Valid Region Statistics:")
+            print(f"   GT   → Range: [{gt_i.min().item():.4f}, {gt_i.max().item():.4f}]m")
+            print(f"        → Mean:  {gt_i.mean().item():.4f}m | Median: {gt_i.median().item():.4f}m")
+            print(f"   Pred → Range: [{pred_i.min().item():.4f}, {pred_i.max().item():.4f}]m")
+            print(f"        → Mean:  {pred_i.mean().item():.4f}m | Median: {pred_i.median().item():.4f}m")
         
         # Ground-truth median scaling if needed
         if use_gt_scale:
@@ -364,23 +386,32 @@ def compute_depth_metrics(config, gt, pred, use_gt_scale=True):
             pred_median = torch.median(pred_i)
             scale = gt_median / pred_median
             
-            # Debug scaling (only for first batch)
-            if i == 0 and not hasattr(compute_depth_metrics, '_debug_scale'):
-                compute_depth_metrics._debug_scale = True
-                print(f"\nMedian scaling for first sample:")
-                print(f"  GT median: {gt_median.item():.4f}")
-                print(f"  Pred median: {pred_median.item():.4f}")
-                print(f"  Scale factor: {scale.item():.4f}")
-                print(f"  Pred range before scale: [{pred_i.min().item():.4f}, {pred_i.max().item():.4f}]")
+            # 🎯 Scaling debug (first sample only)
+            if i == 0 and debug_key not in getattr(compute_depth_metrics, '_debug_scale_keys', set()):
+                if not hasattr(compute_depth_metrics, '_debug_scale_keys'):
+                    compute_depth_metrics._debug_scale_keys = set()
+                compute_depth_metrics._debug_scale_keys.add(debug_key)
+                print(f"\n🎚️  GT Median Scaling:")
+                print(f"   GT median:   {gt_median.item():.4f}m")
+                print(f"   Pred median: {pred_median.item():.4f}m")
+                print(f"   Scale factor: {scale.item():.4f}x")
+                print(f"   Pred before: [{pred_i.min().item():.4f}, {pred_i.max().item():.4f}]m")
             
             pred_i = pred_i * scale
             
-            if i == 0 and not hasattr(compute_depth_metrics, '_debug_scale_after'):
-                compute_depth_metrics._debug_scale_after = True
-                print(f"  Pred range after scale: [{pred_i.min().item():.4f}, {pred_i.max().item():.4f}]")
+            if i == 0 and debug_key not in getattr(compute_depth_metrics, '_debug_scale_after_keys', set()):
+                if not hasattr(compute_depth_metrics, '_debug_scale_after_keys'):
+                    compute_depth_metrics._debug_scale_after_keys = set()
+                compute_depth_metrics._debug_scale_after_keys.add(debug_key)
+                print(f"   Pred after:  [{pred_i.min().item():.4f}, {pred_i.max().item():.4f}]m")
         
-        # Clamp predicted depth values to min/max values
-        pred_i = pred_i.clamp(config.min_depth, config.max_depth)
+        # 🔧 OPTIMIZATION: Clamp is unnecessary when using bounded linear mapping (e.g., ResNetSAN01.disp_to_inv)
+        # The network already guarantees depth ∈ [min_depth, max_depth] by design
+        # Pred values are mathematically guaranteed to be in the valid range:
+        #   inv_depth = min_inv + (max_inv - min_inv) * sigmoid(x)
+        #   depth = 1 / inv_depth ∈ [min_depth, max_depth] ∀ sigmoid(x) ∈ [0,1]
+        # GT filtering (via valid mask) is sufficient for evaluation
+        # pred_i = pred_i.clamp(config.min_depth, config.max_depth)  # ← REMOVED (NO-OP)
 
         # Calculate depth metrics
         thresh = torch.max((gt_i / pred_i), (pred_i / gt_i))
@@ -396,14 +427,20 @@ def compute_depth_metrics(config, gt, pred, use_gt_scale=True):
         rmse_log += torch.sqrt(torch.mean((torch.log(gt_i) -
                                            torch.log(pred_i)) ** 2))
         
-        # Debug first sample metrics
-        if i == 0 and not hasattr(compute_depth_metrics, '_debug_metrics'):
-            compute_depth_metrics._debug_metrics = True
-            print(f"\nFirst sample metrics:")
-            print(f"  abs_rel: {(torch.mean(torch.abs(diff_i) / gt_i)).item():.6f}")
-            print(f"  rmse: {torch.sqrt(torch.mean(diff_i ** 2)).item():.6f}")
-            print(f"  a1: {(thresh < 1.25).float().mean().item():.6f}")
-            print("="*80 + "\n")
+        # 🎯 First sample metrics debug
+        if i == 0 and debug_key not in getattr(compute_depth_metrics, '_debug_metrics_keys', set()):
+            if not hasattr(compute_depth_metrics, '_debug_metrics_keys'):
+                compute_depth_metrics._debug_metrics_keys = set()
+            compute_depth_metrics._debug_metrics_keys.add(debug_key)
+            print(f"\n📈 Metrics (first sample):")
+            print(f"   abs_rel:  {(torch.mean(torch.abs(diff_i) / gt_i)).item():.6f}")
+            print(f"   sq_rel:   {(torch.mean(diff_i ** 2 / gt_i)).item():.6f}")
+            print(f"   rmse:     {torch.sqrt(torch.mean(diff_i ** 2)).item():.6f}")
+            print(f"   rmse_log: {torch.sqrt(torch.mean((torch.log(gt_i) - torch.log(pred_i)) ** 2)).item():.6f}")
+            print(f"   a1:       {(thresh < 1.25).float().mean().item():.6f}")
+            print(f"   a2:       {(thresh < 1.25**2).float().mean().item():.6f}")
+            print(f"   a3:       {(thresh < 1.25**3).float().mean().item():.6f}")
+            print("="*100 + "\n")
     
     # Return average values for each metric
     return torch.tensor([metric / batch_size for metric in

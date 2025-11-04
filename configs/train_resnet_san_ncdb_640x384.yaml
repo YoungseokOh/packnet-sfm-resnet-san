@@ -24,9 +24,10 @@ model:
         use_enhanced_lidar: false  # ❌ Enhanced 비활성화
     params:
         crop: ''
-        min_depth: 0.05
-        max_depth: 100.0
+        min_depth: 0.5
+        max_depth: 50.0
         scale_output: 'top-center'
+        use_log_space: false  # true로 설정하면 log space 학습
 
 datasets:
   augmentation:
@@ -57,15 +58,15 @@ arch:
     clip_grad: 10.0
     max_epochs: 30 # Increased for longer training
     eval_during_training: true
-    eval_progress_interval: 0.5
-    eval_subset_size: 25
+    eval_progress_interval: 0.25
+    eval_subset_size: 50
 
 checkpoint:
-    filepath: 'checkpoints/resnetsan01_640x384_newest_0.05to100/'
+    filepath: 'checkpoints/resnetsan01_640x384_linear_05_100/'
     save_top_k: -1
 
 save:
-    folder: 'outputs/resnetsan01_640x384_newest_0.05to100/'
+    folder: 'outputs/resnetsan01_640x384_linear_05_100/'
 
 tensorboard:
     dry_run: false

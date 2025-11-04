@@ -445,19 +445,25 @@ def make_eval_namespace(args: argparse.Namespace) -> argparse.Namespace:
     )
 
 
-def print_summary_table(class_metrics: Dict[str, Tuple[List[float], int]], overall: Tuple[List[float], int]) -> None:
+def print_summary_table(class_metrics: Dict[str, Tuple[List[float], int]], 
+                        overall: Tuple[List[float], int],
+                        full_image_metrics: Optional[Tuple[List[float], int]] = None) -> None:
     header = ["Class", "Count"] + METRIC_NAMES
     rows = []
     for class_name, (metrics, count) in sorted(class_metrics.items()):
         rows.append([class_name, str(count)] + [f"{m:.4f}" if not math.isnan(m) else "nan" for m in metrics])
-    rows.append(["ALL", str(overall[1])] + [f"{m:.4f}" if not math.isnan(m) else "nan" for m in overall[0]])
+    rows.append(["car+road", str(overall[1])] + [f"{m:.4f}" if not math.isnan(m) else "nan" for m in overall[0]])
+    
+    # 전체 픽셀 메트릭 추가 (full image)
+    if full_image_metrics is not None:
+        rows.append(["ALL", str(full_image_metrics[1])] + [f"{m:.4f}" if not math.isnan(m) else "nan" for m in full_image_metrics[0]])
 
     col_widths = [max(len(row[i]) for row in rows + [header]) for i in range(len(header))]
 
     def print_row(row: Sequence[str]) -> None:
         print("  ".join(word.ljust(col_widths[i]) for i, word in enumerate(row)))
 
-    print("\n평가 요약 (객체 마스크 기준)")
+    print("\n평가 요약 (객체 마스크 및 전체 기준)")
     print_row(header)
     print("-" * (sum(col_widths) + 2 * (len(col_widths) - 1)))
     for row in rows:
@@ -631,14 +637,29 @@ def analyze_by_distance_ranges(
 def analyze_by_distance_ranges_pixel_level(
     samples_data: List[SampleData],
     dist_ranges: List[Tuple[str, float, float]],
-    eval_namespace: argparse.Namespace
-) -> None:
-    """픽셀 레벨로 거리 범위별 평가 (신규 정확한 방식)"""
+    eval_namespace: argparse.Namespace,
+    class_filter: Optional[str] = None
+) -> List[Tuple[str, int, List[float]]]:
+    """픽셀 레벨로 거리 범위별 평가 (신규 정확한 방식)
+    
+    Args:
+        samples_data: 샘플 데이터 리스트
+        dist_ranges: 거리 범위 리스트
+        eval_namespace: 평가 설정
+        class_filter: 특정 클래스만 필터링 (None이면 전체)
+        
+    Returns:
+        List of (range_name, pixel_count, metrics_list)
+    """
     
     # 1. 거리별로 픽셀 수집
     range_pixels: Dict[str, Dict[str, List[float]]] = {}
     
     for sample in samples_data:
+        # 클래스 필터 적용
+        if class_filter is not None and sample.class_name != class_filter:
+            continue
+            
         valid_mask = (sample.mask > 0) & (sample.gt_depth > 0)
         gt_valid = sample.gt_depth[valid_mask]
         pred_valid = sample.pred_depth[valid_mask]
@@ -659,10 +680,12 @@ def analyze_by_distance_ranges_pixel_level(
     # 2. 각 범위별 메트릭 계산 (직접 계산 - min/max depth 필터링 없이)
     header = ["Range", "Pixels"] + METRIC_NAMES
     rows = []
+    results = []  # (range_name, pixel_count, metrics_list) 저장
     
     for range_name, min_d, max_d in dist_ranges:
         if range_name not in range_pixels or len(range_pixels[range_name]['gt']) == 0:
             rows.append([range_name, "0"] + ["nan"] * len(METRIC_NAMES))
+            results.append((range_name, 0, [float('nan')] * len(METRIC_NAMES)))
             continue
         
         # GT/Pred 배열 (이미 필터링된 데이터)
@@ -690,6 +713,7 @@ def analyze_by_distance_ranges_pixel_level(
         
         rows.append([range_name, str(len(gt_array))] + 
                    [f"{m:.4f}" for m in metrics_list])
+        results.append((range_name, len(gt_array), metrics_list))
     
     # 테이블 출력
     col_widths = [max(len(row[i]) for row in rows + [header]) for i in range(len(header))]
@@ -697,11 +721,17 @@ def analyze_by_distance_ranges_pixel_level(
     def print_row(row: Sequence[str]) -> None:
         print("  ".join(word.ljust(col_widths[i]) for i, word in enumerate(row)))
     
-    print("\n거리별 평가 결과 (픽셀 레벨 - 정확한 방식)")
+    # 클래스별 제목 출력
+    if class_filter:
+        print(f"\n거리별 평가 결과 [{class_filter.upper()}] (픽셀 레벨)")
+    else:
+        print(f"\n거리별 평가 결과 [ALL] (픽셀 레벨)")
     print_row(header)
     print("-" * (sum(col_widths) + 2 * (len(col_widths) - 1)))
     for row in rows:
         print_row(row)
+    
+    return results
 
 
 def print_distance_error_distribution(
@@ -1039,6 +1069,18 @@ def main() -> None:
                 class_name=class_name,
             ))
         
+        # ✅ 전체 이미지 픽셀 수집 (마스크 없이 GT > 0인 모든 픽셀)
+        if sample_has_valid_mask:
+            # 전체 이미지를 "ALL" 클래스로 저장
+            full_image_mask = (gt_data > 0).astype(np.float32)
+            all_samples_data.append(SampleData(
+                stem=sample.stem,
+                gt_depth=gt_data.copy(),
+                pred_depth=prediction.copy(),
+                mask=full_image_mask,
+                class_name="ALL",
+            ))
+        
         if sample_has_valid_mask:
             processed_samples += 1
 
@@ -1050,8 +1092,28 @@ def main() -> None:
         class_metrics[class_name] = (acc.mean(), acc.count())
 
     overall_metrics = (overall_accumulator.mean(), overall_accumulator.count())
+    
+    # ✅ 전체 이미지 픽셀 메트릭 계산 (마스크 무시, GT > 0인 모든 픽셀)
+    full_image_accumulator = MetricsAccumulator(METRIC_NAMES)
+    for sample in samples:
+        gt_data = load_depth(str(sample.gt_path)) if sample.gt_path.exists() else None
+        if gt_data is None:
+            continue
+        
+        prediction = load_prediction(sample.prediction_path)
+        if prediction is None:
+            continue
+        
+        # 전체 이미지에서 GT > 0인 모든 픽셀로 평가
+        gt_tensor = torch.tensor(gt_data, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
+        pred_tensor = torch.tensor(prediction, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
+        
+        full_metrics = compute_depth_metrics(eval_namespace, gt_tensor, pred_tensor, use_gt_scale=args.use_gt_scale)
+        full_image_accumulator.add(full_metrics)
+    
+    full_image_metrics = (full_image_accumulator.mean(), full_image_accumulator.count()) if full_image_accumulator.count() > 0 else None
 
-    print_summary_table(class_metrics, overall_metrics)
+    print_summary_table(class_metrics, overall_metrics, full_image_metrics)
     
     # 거리 범위 정의
     dist_ranges = [
@@ -1061,9 +1123,22 @@ def main() -> None:
         ("D > 3m", 3.0, args.max_depth)
     ]
     
-    # ✅ 픽셀 레벨 거리별 평가 (신규 정확한 방식)
+    # ✅ 클래스별 거리별 평가
+    distance_results = {}  # {class_name: [(range_name, pixels, metrics), ...]}
+    
     if all_samples_data:
-        analyze_by_distance_ranges_pixel_level(all_samples_data, dist_ranges, eval_namespace)
+        # 각 클래스별로 거리 평가 수행 (ALL 포함)
+        detected_classes = sorted(set(sample.class_name for sample in all_samples_data))
+        for class_name in detected_classes:
+            results = analyze_by_distance_ranges_pixel_level(all_samples_data, dist_ranges, eval_namespace, class_filter=class_name)
+            distance_results[class_name] = results
+        
+        # car+road 합친 것 (car와 road 샘플만 사용)
+        car_road_samples = [s for s in all_samples_data if s.class_name in ['car', 'road']]
+        if car_road_samples:
+            car_road_results = analyze_by_distance_ranges_pixel_level(car_road_samples, dist_ranges, eval_namespace, class_filter=None)
+            distance_results['car+road'] = car_road_results
+        
         print_distance_error_distribution(all_samples_data, dist_ranges)
 
     # 메트릭 저장 - output_dirs['metrics']에 자동 저장
@@ -1074,8 +1149,22 @@ def main() -> None:
             metric_str = ",".join(f"{m:.6f}" if not math.isnan(m) else "nan" for m in metrics)
             f.write(f"{class_name},{count},{metric_str}\n")
         metric_str = ",".join(f"{m:.6f}" if not math.isnan(m) else "nan" for m in overall_metrics[0])
-        f.write(f"ALL,{overall_metrics[1]},{metric_str}\n")
+        f.write(f"car+road,{overall_metrics[1]},{metric_str}\n")
+        if full_image_metrics is not None:
+            metric_str = ",".join(f"{m:.6f}" if not math.isnan(m) else "nan" for m in full_image_metrics[0])
+            f.write(f"ALL,{full_image_metrics[1]},{metric_str}\n")
     print(f"\n✅ 요약 메트릭 저장: {summary_path}")
+    
+    # ✅ 거리별 메트릭 저장
+    if distance_results:
+        distance_path = output_dirs['metrics'] / "summary_by_distance.csv"
+        with open(distance_path, "w") as f:
+            f.write("Class,Range,Pixels," + ",".join(METRIC_NAMES) + "\n")
+            for class_name in sorted(distance_results.keys()):
+                for range_name, pixel_count, metrics in distance_results[class_name]:
+                    metric_str = ",".join(f"{m:.6f}" if not math.isnan(m) else "nan" for m in metrics)
+                    f.write(f"{class_name},{range_name},{pixel_count},{metric_str}\n")
+        print(f"✅ 거리별 메트릭 저장: {distance_path}")
 
     # Per-instance JSON 저장
     json_path = output_dirs['metrics'] / "per_instance.json"

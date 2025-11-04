@@ -87,22 +87,22 @@
         "name": "Train ONE STEP (ENC ×256)",
         "type": "debugpy",
         "request": "launch",
-        // "program": "${workspaceFolder}/scripts/train.py",
-        "program": "${workspaceFolder}/scripts/eval.py",
+        "program": "${workspaceFolder}/scripts/train.py",
+        // "program": "${workspaceFolder}/scripts/eval.py",
         // "program": "${workspaceFolder}/scripts/infer_ncdb.py",
         "console": "integratedTerminal",
         "cwd": "${workspaceFolder}",
         // Training
-        // "args": ["configs/train_resnet_san_ncdb_640x384.yaml"],
+        "args": ["configs/train_resnet_san_ncdb_640x384.yaml"],
         // "args": ["configs/train_resnet_san_ncdb.yaml"],
         // Evaliation
-        "args": 
-            [
-                "--checkpoint",
-                "ResNet-SAN_0.5to100.ckpt",
-                "--config", 
-                "configs/train_resnet_san_ncdb_640x384.yaml"
-            ],
+        // "args": 
+        //     [
+        //         "--checkpoint",
+        //         "ResNet-SAN_0.5to100.ckpt",
+        //         "--config", 
+        //         "configs/train_resnet_san_ncdb_640x384.yaml"
+        //     ],
 
         // Inference
         // "args":

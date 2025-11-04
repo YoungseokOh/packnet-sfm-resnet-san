@@ -40,6 +40,33 @@ cfg.model.loss.supervised_method = 'sparse-l1' # Method for depth supervision
 cfg.model.loss.supervised_num_scales = 4       # Number of scales for supervised learning
 cfg.model.loss.supervised_loss_weight = 0.9    # Supervised loss weight
 cfg.model.loss.consistency_loss_weight = 0.1   # Consistency loss weight (for Yolov8 Semi-Supervised Learning)
+# Scale-Adaptive Loss defaults
+cfg.model.loss.lambda_sg = 0.5                 # Gradient loss weight for scale-adaptive loss
+cfg.model.loss.num_scales = 4                  # Multi-scale gradient levels for scale-adaptive loss
+cfg.model.loss.use_absolute = True             # Include absolute term in scale-adaptive loss
+cfg.model.loss.use_inv_depth = False           # Operate directly on inverse depth in scale-adaptive loss
+cfg.model.loss.epsilon = 1e-8                  # Numerical stability constant for scale-adaptive loss
+# 🆕 Adaptive Multi-Domain Loss parameters
+cfg.model.loss.ssi_weight = 0.7                # SSI loss weight in SSISilogLoss (for adaptive multi-domain)
+cfg.model.loss.silog_weight = 0.3              # Silog loss weight in SSISilogLoss (for adaptive multi-domain)
+cfg.model.loss.alpha_ssi = 0.85                # Alpha parameter for SSI loss (for adaptive multi-domain)
+cfg.model.loss.beta_silog = 0.15               # Beta parameter for Silog loss (for adaptive multi-domain)
+cfg.model.loss.min_depth = 0.05                # Minimum depth for clamping (for adaptive multi-domain)
+cfg.model.loss.max_depth = 100.0               # Maximum depth for clamping (for adaptive multi-domain)
+# 🆕 Fixed Multi-Domain Loss parameters (Phase 1)
+cfg.model.loss.w_structure = 0.4               # Structure (gradient) loss weight in fixed multi-domain loss
+cfg.model.loss.w_scale = 0.6                   # Scale (absolute depth) loss weight in fixed multi-domain loss
+cfg.model.loss.alpha = 0.85                    # Alpha parameter for SSISilogLoss (fixed multi-domain)
+cfg.model.loss.silog_ratio = 10                # Silog ratio parameter (fixed multi-domain)
+cfg.model.loss.silog_ratio2 = 0.85             # Silog ratio2 parameter (fixed multi-domain)
+# 🆕 Near-field weighting for SSI-Silog loss (Phase 2)
+cfg.model.loss.enable_near_field_weighting = False  # Enable distance-based pixel weighting for near-field prioritization
+# 🛣️ Road-aware weighting for SSI-Silog loss (Autonomous Driving)
+cfg.model.loss.enable_road_weighting = False   # Enable road-aware pixel weighting
+cfg.model.loss.near_field_threshold = 1.0      # Near-field distance threshold (m)
+cfg.model.loss.road_weight = 5.0               # Weight for road pixels
+cfg.model.loss.road_nearfield_weight = 10.0    # Weight for road + near-field pixels
+cfg.model.loss.nonroad_nearfield_weight = 3.0  # Weight for non-road near-field pixels
 ########################################################################################################################
 ### MODEL.DEPTH_NET
 ########################################################################################################################
@@ -54,6 +81,9 @@ cfg.model.depth_net.force_output_shape = () # 🆕 출력 해상도 강제. 예:
 cfg.model.depth_net.use_film = False        # Enable Depth-aware FiLM
 cfg.model.depth_net.film_scales = [0]       # Which scales to apply FiLM
 cfg.model.depth_net.use_enhanced_lidar = False  # Enable enhanced LiDAR processing
+
+# 🆕 ReZero 관련 설정 (ResNetSAN01_ReZero 전용)
+cfg.model.depth_net.use_encoder_rezero = False  # Enable ReZero in ResNet encoder blocks
 
 # 🆕 YOLOv8SAN01 전용 파라미터 (선택적으로만 사용)
 cfg.model.depth_net.variant = 's'           # YOLOv8 variant (n, s, m, l, x) - YOLOv8SAN01에서만 사용
@@ -98,7 +128,7 @@ cfg.model.params.crop = 'garg'              # Crop type
 cfg.model.params.min_depth = 0.0            # Minimum depth value
 cfg.model.params.max_depth = 100.0          # Maximum depth value
 cfg.model.params.scale_output = ''          # Scale output type
-
+cfg.model.params.use_log_space = False    # 🆕 Use log space for depth representation
 ########################################################################################################################
 ### ARCH
 ########################################################################################################################

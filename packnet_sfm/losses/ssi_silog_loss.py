@@ -55,12 +55,35 @@ class SSISilogLoss(LossBase):
         self.min_depth = float(min_depth)
         self.max_depth = float(max_depth)
 
-    def compute_ssi_loss(self, pred_inv_depth, gt_inv_depth, mask):
-        """Compute SSI loss on inverse depth"""
+    def compute_ssi_loss_inv(self, pred_inv_depth, gt_inv_depth, mask):
+        """Compute SSI loss in inverse depth domain (original PackNet approach)"""
+        if mask is None:
+            mask = (gt_inv_depth > 0)
+        
         if mask.sum() == 0:
             return torch.tensor(0.0, device=pred_inv_depth.device, requires_grad=True)
         
+        # Compute in inverse depth space (better for far objects)
         diff = (pred_inv_depth[mask] - gt_inv_depth[mask])
+        diff2 = diff ** 2
+        mean = diff.mean()
+        var = diff2.mean() - mean ** 2
+        ssi_loss = var + self.alpha * mean ** 2
+        
+        # Expose internals for debugging/metrics
+        try:
+            self.add_metric('ssi_mean', mean)
+            self.add_metric('ssi_var', var)
+        except Exception:
+            pass
+        return ssi_loss
+
+    def compute_ssi_loss(self, pred_depth, gt_depth, mask):
+        """Compute SSI loss on depth (scale-shift invariant, works on any monotonic scale)"""
+        if mask.sum() == 0:
+            return torch.tensor(0.0, device=pred_depth.device, requires_grad=True)
+        
+        diff = (pred_depth[mask] - gt_depth[mask])
         diff2 = diff ** 2
         mean = diff.mean()
         var = diff2.mean() - mean ** 2
@@ -73,15 +96,13 @@ class SSISilogLoss(LossBase):
             pass
         return ssi_loss
 
-    def compute_silog_loss(self, pred_inv_depth, gt_inv_depth, mask):
-        """Compute Silog loss on depth"""
+    def compute_silog_loss(self, pred_depth, gt_depth, mask):
+        """Compute Silog loss on depth (no conversion needed - already in depth)"""
         if mask.sum() == 0:
-            return torch.tensor(0.0, device=pred_inv_depth.device, requires_grad=True)
+            return torch.tensor(0.0, device=pred_depth.device, requires_grad=True)
 
-        # 1) inv -> depth 변환
-        pred_depth = inv2depth(pred_inv_depth)
-        gt_depth = inv2depth(gt_inv_depth)
-
+        # 1) Already in depth domain - no conversion needed!
+        
         # 2) YAML의 min/max로 클램프 (없으면 기본값)
         clamp_min = 1e-3 if self.min_depth is None else float(self.min_depth)
         clamp_max = 100.0 if self.max_depth is None else float(self.max_depth)
@@ -99,16 +120,19 @@ class SSISilogLoss(LossBase):
         pred_depth_masked = pred_depth[mask]
         gt_depth_masked = gt_depth[mask]
 
-        # 3.5) Silog 계산 준비 및 계산
-        log_pred = torch.log(pred_depth_masked * self.silog_ratio)
-        log_gt = torch.log(gt_depth_masked * self.silog_ratio)
+        # 3.5) Silog 계산 (원본 논문 공식)
+        # ✅ CRITICAL FIX: Remove multiplicative scaling factor
+        # Original Silog formula: sqrt(E[log_diff^2] - lambda * E[log_diff]^2)
+        # where log_diff = log(pred) - log(gt)
+        log_pred = torch.log(pred_depth_masked)
+        log_gt = torch.log(gt_depth_masked)
         log_diff = log_pred - log_gt
         silog1 = torch.mean(log_diff ** 2)
         silog2 = self.silog_ratio2 * (log_diff.mean() ** 2)
         silog_var = silog1 - silog2
         if torch.any(silog_var < 0):
             silog_var = torch.abs(silog_var)
-        silog_loss = torch.sqrt(silog_var + 1e-8) * self.silog_ratio
+        silog_loss = torch.sqrt(silog_var + 1e-8)  # ✅ No multiplication by ratio!
         # Expose internals for debugging/metrics
         try:
             self.add_metric('silog1', silog1)
@@ -228,9 +252,9 @@ class SSISilogLoss(LossBase):
         Parameters
         ----------
         pred_inv_depth : torch.Tensor [B,1,H,W]
-            Predicted inverse depth
+            Predicted inverse depth (sigmoid output)
         gt_inv_depth : torch.Tensor [B,1,H,W]
-            Ground truth inverse depth
+            Ground truth inverse depth (converted from depth)
         mask : torch.Tensor [B,1,H,W], optional
             Valid pixel mask
             
@@ -239,25 +263,30 @@ class SSISilogLoss(LossBase):
         loss : torch.Tensor
             Combined SSI + Silog loss
         """
+        # ✅ SSI Loss: Compute in inverse depth domain (better for far objects)
+        ssi_loss = self.compute_ssi_loss_inv(pred_inv_depth, gt_inv_depth, mask)
+        
+        # ✅ Silog Loss: Convert to depth domain (required for log computation)
+        pred_depth = inv2depth(pred_inv_depth)
+        gt_depth = inv2depth(gt_inv_depth)
+        
         if mask is None:
-            mask = (gt_inv_depth > 0)
+            mask = (gt_depth > 0)
+        
+        silog_loss = self.compute_silog_loss(pred_depth, gt_depth, mask)
         
         # 유효 픽셀 수 확인
         valid_pixels = mask.sum()
         if valid_pixels < 100:
-            return torch.tensor(0.0, device=pred_inv_depth.device, requires_grad=True)
+            return torch.tensor(0.0, device=pred_depth.device, requires_grad=True)
         
         # 입력 유효성 검사
-        if torch.isnan(pred_inv_depth).any() or torch.isnan(gt_inv_depth).any():
-            return torch.tensor(1.0, device=pred_inv_depth.device, requires_grad=True)
-        
-        # 개별 손실 계산
-        ssi_loss = self.compute_ssi_loss(pred_inv_depth, gt_inv_depth, mask)
-        silog_loss = self.compute_silog_loss(pred_inv_depth, gt_inv_depth, mask)
+        if torch.isnan(pred_depth).any() or torch.isnan(gt_depth).any():
+            return torch.tensor(1.0, device=pred_depth.device, requires_grad=True)
         
         # NaN 체크
         if torch.isnan(ssi_loss) or torch.isnan(silog_loss):
-            return torch.tensor(1.0, device=pred_inv_depth.device, requires_grad=True)
+            return torch.tensor(1.0, device=pred_depth.device, requires_grad=True)
         
         # 결합된 손실
         total_loss = self.ssi_weight * ssi_loss + self.silog_weight * silog_loss

@@ -31,6 +31,7 @@ class SemiSupCompletionModel(SelfSupModel):
     def __init__(self, supervised_loss_weight=0.9, weight_rgbd=1.0,
                  consistency_loss_weight=0.0,
                  min_depth=0.5, max_depth=80.0,  # ← YAML에서 넘어오는 값 그대로 이름 유지
+                 use_log_space=False,  # 🆕 Log space interpolation option
                  **kwargs):
         # Initializes SelfSupModel
         super().__init__(**kwargs)
@@ -44,6 +45,13 @@ class SemiSupCompletionModel(SelfSupModel):
         if max_depth <= min_depth: max_depth = min_depth + 1.0
         self.min_depth = float(min_depth)
         self.max_depth = float(max_depth)
+        # 🆕 Log space option
+        self.use_log_space = use_log_space
+        
+        # 🆕 Print transformation mode
+        transform_mode = "LOG SPACE" if use_log_space else "LINEAR SPACE"
+        print(f"🔧 SemiSupCompletionModel: Using {transform_mode} interpolation")
+        print(f"   Depth range: [{self.min_depth}, {self.max_depth}]m")
 
         # SupervisedLoss에 YAML min/max depth를 명시적으로 전달
         self._supervised_loss = SupervisedLoss(
@@ -446,21 +454,41 @@ class SemiSupCompletionModel(SelfSupModel):
                     batch['depth'] = d  # 그대로 유지
             # ====================================================================
 
+            # ✅ CRITICAL FIX: Convert sigmoid to bounded inverse depth
+            # Model outputs sigmoid [0, 1], but we need to convert it to
+            # inverse depth [1/max_depth, 1/min_depth] to match evaluation!
+            # 🆕 Now supports both LINEAR and LOG space interpolation!
+            from packnet_sfm.utils.post_process_depth import sigmoid_to_inv_depth
+            
+            # Convert sigmoid outputs to bounded inverse depth
+            sigmoid_outputs = self_sup_output['inv_depths']
+            bounded_inv_depths = [
+                sigmoid_to_inv_depth(sig, self.min_depth, self.max_depth, use_log_space=self.use_log_space)
+                for sig in sigmoid_outputs
+            ]
+            
             # (호출 형태 그대로) supervised loss
+            # ✅ GT depth를 inverse depth로 변환하여 전달 (inverse depth 도메인에서 비교)
             sup_output = self.supervised_loss(
-                self_sup_output['inv_depths'], depth2inv(batch['depth']),
+                bounded_inv_depths, depth2inv(batch['depth']),
                 return_logs=return_logs, progress=progress)
 
             try:
-                self._save_loss_inv_debug(self_sup_output['inv_depths'], depth2inv(batch['depth']))
+                self._save_loss_inv_debug(bounded_inv_depths, depth2inv(batch['depth']))
             except Exception as e:
                 print("[LOSS_INV_VIZ][ERROR]", e)
 
             loss += self.supervised_loss_weight * sup_output['loss']
 
             if 'inv_depths_rgbd' in self_sup_output:
+                # Also convert RGBD outputs
+                sigmoid_rgbd = self_sup_output['inv_depths_rgbd']
+                bounded_inv_rgbd = [
+                    sigmoid_to_inv_depth(sig, self.min_depth, self.max_depth, use_log_space=self.use_log_space)
+                    for sig in sigmoid_rgbd
+                ]
                 sup_output2 = self.supervised_loss(
-                    self_sup_output['inv_depths_rgbd'], depth2inv(batch['depth']),
+                    bounded_inv_rgbd, depth2inv(batch['depth']),
                     return_logs=return_logs, progress=progress)
                 loss += self.weight_rgbd * self.supervised_loss_weight * sup_output2['loss']
                 if 'depth_loss' in self_sup_output:

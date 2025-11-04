@@ -49,8 +49,26 @@ class EnhancedMinkowskiEncoder(nn.Module):
     def _init_fallback(self, in_channels, out_channels, kernel_size, **kwargs):
         """Fallback implementation with regular 3D convolutions"""
         print("🔧 Using fallback 3D convolution implementation")
-        self.conv1 = nn.Conv3d(in_channels, out_channels // 2, kernel_size, padding=kernel_size//2)
-        self.conv2 = nn.Conv3d(out_channels // 2, out_channels, kernel_size, padding=kernel_size//2)
+        
+        # Convert to int if they're array/list/tensor
+        import numpy as np
+        if isinstance(in_channels, (list, tuple, np.ndarray)) or torch.is_tensor(in_channels):
+            in_ch = int(in_channels[0] if isinstance(in_channels, (list, tuple, np.ndarray)) else in_channels.item())
+        else:
+            in_ch = int(in_channels)
+            
+        if isinstance(out_channels, (list, tuple, np.ndarray)) or torch.is_tensor(out_channels):
+            out_ch = int(out_channels[0] if isinstance(out_channels, (list, tuple, np.ndarray)) else out_channels.item())
+        else:
+            out_ch = int(out_channels)
+            
+        if isinstance(kernel_size, (list, tuple, np.ndarray)) or torch.is_tensor(kernel_size):
+            k = int(kernel_size[0] if isinstance(kernel_size, (list, tuple, np.ndarray)) else kernel_size.item())
+        else:
+            k = int(kernel_size)
+        
+        self.conv1 = nn.Conv3d(in_ch, out_ch // 2, k, padding=k//2)
+        self.conv2 = nn.Conv3d(out_ch // 2, out_ch, k, padding=k//2)
         self.relu = nn.ReLU()
         self.adaptive_pool = nn.AdaptiveAvgPool3d((8, 8, 8))
         
@@ -95,3 +113,24 @@ class EnhancedMinkowskiEncoder(nn.Module):
         x = self.relu(self.conv2(x))
         x = self.adaptive_pool(x)
         return x
+    
+    def prep(self, input_depth):
+        """
+        Prepare input depth for processing.
+        For Minkowski: converts to sparse tensor
+        For fallback: stores as-is
+        """
+        global MINKOWSKI_AVAILABLE
+        if MINKOWSKI_AVAILABLE and ME is not None:
+            # MinkowskiEngine sparse tensor preparation
+            try:
+                # Convert dense depth to sparse coordinates
+                # This is a placeholder - actual implementation depends on data format
+                self._prepared_input = input_depth
+                return
+            except Exception as e:
+                print(f"⚠️ MinkowskiEngine prep failed: {e}, using fallback")
+                MINKOWSKI_AVAILABLE = False
+        
+        # Fallback: just store the input
+        self._prepared_input = input_depth

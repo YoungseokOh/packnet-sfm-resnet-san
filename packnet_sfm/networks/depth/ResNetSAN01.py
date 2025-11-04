@@ -238,60 +238,30 @@ class ResNetSAN01(nn.Module):
             
             skip_features = fused_features
         
-        # Decode to get inverse depth maps
-        outputs = self.decoder(skip_features)  # ("disp", i) 는 이미 sigmoid 통과된 값 (0~1)
+                # Decode to get sigmoid outputs (0~1)
+        outputs = self.decoder(skip_features)  # ("disp", i) is sigmoid output [0, 1]
 
-        # ✅ 두 번째 sigmoid 제거: decoder 출력 그대로 사용
-        #    헤드 매핑: 기본은 [1/max, 1/min] 선형 보간으로 "유한 범위"의 inverse-depth를 만듭니다.
-        #    필요 시 SAN01_INV_MODE=min_only 로 설정하면 이전 "disp / min_depth" 동작을 사용할 수 있습니다.
-        inv_mode = os.environ.get("SAN01_INV_MODE", "bounded").lower()
-        inv_space = os.environ.get("SAN01_INV_SPACE", "log").lower()  # 'log' | 'lin'
-        if not hasattr(self, "_inv_mode_logged"):
-            print(f"\n[ResNetSAN01] disp->inv mode={inv_mode}, space={inv_space} | min_depth={self.min_depth} max_depth={self.max_depth}")
-            self._inv_mode_logged = True
-
-        def disp_to_inv(disp):
-            if inv_mode == "min_only":
-                # 이전 동작: inv  disp / min_depth (깊이 상한 없음 → 발산 위험)
-                return disp / self.min_depth
-            # 권장 동작 (bounded): inv in [1/max, 1/min]
-            #   space='lin' : linear in inverse-depth (Monodepth-style)
-            #   space='log' : linear in log(inverse-depth) → better conditioning for wide ranges
-            min_disp = 1.0 / max(self.max_depth, 1e-6)
-            max_disp = 1.0 / max(self.min_depth, 1e-6)
-            # 작은 마진으로 경계에서 살짝 떨어뜨려 clamp 경사 소실 방지
-            try:
-                frac = float(os.environ.get("SAN01_INV_MARGIN", "0.01"))  # 1% 기본
-            except Exception:
-                frac = 0.01
-            frac = max(0.0, min(frac, 0.2))  # 안전 범위
-            if inv_space == "lin":
-                rng = max_disp - min_disp
-                min_d2 = min_disp + frac * rng
-                max_d2 = max_disp - frac * rng
-                return min_d2 + (max_d2 - min_d2) * disp
-            # log-space interpolation with margin applied in log domain
-            log_min = torch.log(torch.tensor(min_disp, device=disp.device, dtype=disp.dtype))
-            log_max = torch.log(torch.tensor(max_disp, device=disp.device, dtype=disp.dtype))
-            log_rng = log_max - log_min
-            log_min2 = log_min + frac * log_rng
-            log_max2 = log_max - frac * log_rng
-            log_inv = log_min2 + (log_max2 - log_min2) * disp
-            return torch.exp(log_inv)
+        # 🆕 Return sigmoid outputs directly (post-processing will be done in evaluation)
+        if not hasattr(self, "_sigmoid_mode_logged"):
+            print(f"\n[ResNetSAN01] Returning sigmoid outputs [0, 1] (depth range: [{self.min_depth}, {self.max_depth}])")
+            print(f"[ResNetSAN01] Post-processing (Linear/Log) will be applied during evaluation")
+            self._sigmoid_mode_logged = True
 
         if self.training:
             if hasattr(self, "_maybe_log_disp_stats"):
                 self._maybe_log_disp_stats(outputs)
-            inv_depths = [
-                disp_to_inv(outputs[("disp", 0)]),
-                disp_to_inv(outputs[("disp", 1)]),
-                disp_to_inv(outputs[("disp", 2)]),
-                disp_to_inv(outputs[("disp", 3)]),
+            # Training: return 4 scales of sigmoid outputs
+            sigmoid_outputs = [
+                outputs[("disp", 0)],
+                outputs[("disp", 1)],
+                outputs[("disp", 2)],
+                outputs[("disp", 3)],
             ]
         else:
-            inv_depths = [disp_to_inv(outputs[("disp", 0)])]
+            # Inference: return 1 scale of sigmoid output
+            sigmoid_outputs = [outputs[("disp", 0)]]
 
-        return inv_depths, skip_features
+        return sigmoid_outputs, skip_features
 
     def forward(self, rgb, input_depth=None, **kwargs):
         """
