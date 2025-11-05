@@ -25,7 +25,7 @@ model:
     params:
         crop: ''
         min_depth: 0.5
-        max_depth: 50.0
+        max_depth: 15.0
         scale_output: 'top-center'
         use_log_space: false  # true로 설정하면 log space 학습
 
@@ -62,11 +62,11 @@ arch:
     eval_subset_size: 50
 
 checkpoint:
-    filepath: 'checkpoints/resnetsan01_640x384_linear_05_100/'
+    filepath: 'checkpoints/resnetsan01_640x384_linear_05_15/'
     save_top_k: -1
 
 save:
-    folder: 'outputs/resnetsan01_640x384_linear_05_100/'
+    folder: 'outputs/resnetsan01_640x384_linear_05_15/'
 
 tensorboard:
     dry_run: false

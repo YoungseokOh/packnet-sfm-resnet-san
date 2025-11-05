@@ -74,32 +74,38 @@ class ResNetSAN01(nn.Module):
                     rgb_channels_per_scale.append(0)
 
         # 🔧 Minkowski encoder 선택 (조건부)
-        if use_enhanced_lidar:
-            print("🔧 Using EnhancedMinkowskiEncoder")
-            from packnet_sfm.networks.layers.enhanced_minkowski_encoder import EnhancedMinkowskiEncoder
-            self.mconvs = EnhancedMinkowskiEncoder(
-                self.encoder.num_ch_enc,
-                rgb_channels=rgb_channels_per_scale,
-                with_uncertainty=False
-            )
-            
-            # Feature refinement layers (Enhanced용)
-            self.feature_refinement = nn.ModuleList([
-                nn.Sequential(
-                    nn.Conv2d(ch, ch, 3, padding=1, bias=False),
-                    nn.BatchNorm2d(ch),
-                    nn.ReLU(inplace=True),
-                    nn.Conv2d(ch, ch, 3, padding=1, bias=False)
-                ) for ch in self.encoder.num_ch_enc
-            ])
+        # use_film=False이면 Minkowski encoder 불필요 (추론 전용)
+        self.mconvs = None
+        if use_film:
+            if use_enhanced_lidar:
+                print("🔧 Using EnhancedMinkowskiEncoder")
+                from packnet_sfm.networks.layers.enhanced_minkowski_encoder import EnhancedMinkowskiEncoder
+                self.mconvs = EnhancedMinkowskiEncoder(
+                    self.encoder.num_ch_enc,
+                    rgb_channels=rgb_channels_per_scale,
+                    with_uncertainty=False
+                )
+                
+                # Feature refinement layers (Enhanced용)
+                self.feature_refinement = nn.ModuleList([
+                    nn.Sequential(
+                        nn.Conv2d(ch, ch, 3, padding=1, bias=False),
+                        nn.BatchNorm2d(ch),
+                        nn.ReLU(inplace=True),
+                        nn.Conv2d(ch, ch, 3, padding=1, bias=False)
+                    ) for ch in self.encoder.num_ch_enc
+                ])
+            else:
+                print("🔧 Using standard MinkowskiEncoder")
+                from packnet_sfm.networks.layers.minkowski_encoder import MinkowskiEncoder
+                self.mconvs = MinkowskiEncoder(
+                    self.encoder.num_ch_enc,
+                    rgb_channels=rgb_channels_per_scale,
+                    with_uncertainty=False
+                )
         else:
-            print("🔧 Using standard MinkowskiEncoder")
-            from packnet_sfm.networks.layers.minkowski_encoder import MinkowskiEncoder
-            self.mconvs = MinkowskiEncoder(
-                self.encoder.num_ch_enc,
-                rgb_channels=rgb_channels_per_scale,
-                with_uncertainty=False
-            )
+            print("🔧 Minkowski encoder disabled (inference-only mode)")
+
         
         # Learnable fusion weights
         self.weight = torch.nn.parameter.Parameter(

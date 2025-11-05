@@ -29,12 +29,16 @@ class SimpleDepthNet(torch.nn.Module):
         self.depth_net = resnet_san_model
         
     def forward(self, rgb):
-        """Simple RGB-only inference"""
+        """Simple RGB-only inference - returns single tensor"""
+        # Set eval mode to ensure single-scale output
+        self.depth_net.eval()
+        
         # Direct inference without complex wrapper logic
         inv_depths, _ = self.depth_net.run_network(rgb, input_depth=None)
-        inv_depth = inv_depths[0]  # [B,1,H,W]
         
-        return inv_depth
+        # Return single tensor (not list) to avoid ONNX graph complexity
+        # inv_depths[0] is [B, 1, H, W]
+        return inv_depths[0]
 
 
 def parse_args():
@@ -81,8 +85,8 @@ def load_model_simple(checkpoint_path):
     """Load model using simple approach - similar to your method"""
     print(f"Loading model from: {checkpoint_path}")
     
-    # Load checkpoint
-    checkpoint = torch.load(checkpoint_path, map_location='cpu')
+    # Load checkpoint (weights_only=False for compatibility with YACS config)
+    checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
     config = checkpoint['config']
     state_dict = checkpoint['state_dict']
     
@@ -95,21 +99,40 @@ def load_model_simple(checkpoint_path):
     # Create depth network
     depth_net = ResNetSAN01(
         dropout=config.model.depth_net.get('dropout', 0.5),
-        version=config.model.depth_net.get('version', '1A')
+        version=config.model.depth_net.get('version', '1A'),
+        use_enhanced_lidar=False,  # 🔧 ONNX 변환 시 MinkowskiEngine 비활성화
+        use_film=False  # 🔧 ONNX 변환 시 FiLM 비활성화 (MinkowskiEncoder 불필요)
     )
     
     # Extract and load state dict - similar to your OrderedDict approach
     depth_state = OrderedDict()
+    excluded_keys = []
     for key, value in state_dict.items():
         if key.startswith('model.depth_net.'):
             new_key = key.replace('model.depth_net.', '')
+            
+            # 🔧 ONNX 변환 시 학습 전용 파라미터 제외
+            if new_key in ['weight', 'bias']:
+                excluded_keys.append(new_key)
+                continue
+            
             depth_state[new_key] = value
     
-    # Load state dict
-    missing_keys, unexpected_keys = depth_net.load_state_dict(depth_state, strict=True)
+    if excluded_keys:
+        print(f"🗑️ Excluded training-only parameters: {excluded_keys}")
+    
+    # Load state dict (strict=False: weight, bias 없어도 됨)
+    missing_keys, unexpected_keys = depth_net.load_state_dict(depth_state, strict=False)
     
     if missing_keys:
-        print(f"⚠️ Missing keys: {len(missing_keys)}")
+        # weight, bias는 정상적으로 누락되어야 함
+        expected_missing = {'weight', 'bias'}
+        actual_missing = set(missing_keys)
+        unexpected_missing = actual_missing - expected_missing
+        if unexpected_missing:
+            print(f"⚠️ Unexpected missing keys: {unexpected_missing}")
+        else:
+            print(f"✅ Expected missing keys (training-only): {expected_missing & actual_missing}")
     if unexpected_keys:
         print(f"⚠️ Unexpected keys: {len(unexpected_keys)}")
     

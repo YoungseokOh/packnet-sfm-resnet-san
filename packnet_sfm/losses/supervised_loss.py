@@ -8,13 +8,13 @@ from packnet_sfm.utils.image import match_scales
 from packnet_sfm.utils.depth import inv2depth
 
 from packnet_sfm.losses.loss_base import LossBase, ProgressiveScaling
-from packnet_sfm.losses.scale_adaptive_loss import ScaleAdaptiveLoss
+# from packnet_sfm.losses.scale_adaptive_loss import ScaleAdaptiveLoss  # ❌ Module missing
 from packnet_sfm.losses.ssi_loss import SSILoss
 from packnet_sfm.losses.ssi_trim_loss import SSITrimLoss
 from packnet_sfm.losses.ssi_loss_enhanced import EnhancedSSILoss, ProgressiveEnhancedSSILoss
 from packnet_sfm.losses.ssi_silog_loss import SSISilogLoss
-from packnet_sfm.losses.ssi_silog_nearfield_loss import SSISilogNearFieldLoss, SSISilogNearFieldLossWrapper
-from packnet_sfm.losses.ssi_silog_road_aware_loss import SSISilogRoadAwareLoss, SSISilogRoadAwareLossWrapper
+# from packnet_sfm.losses.ssi_silog_nearfield_loss import SSISilogNearFieldLoss, SSISilogNearFieldLossWrapper  # ❌ Module missing
+# from packnet_sfm.losses.ssi_silog_road_aware_loss import SSISilogRoadAwareLoss, SSISilogRoadAwareLossWrapper  # ❌ Module missing
 
 ########################################################################################################################
 
@@ -96,38 +96,40 @@ def get_loss_func(supervised_method, **kwargs):
             min_depth=kwargs.get('min_depth', None),
             max_depth=kwargs.get('max_depth', None),
         )
-    elif supervised_method.endswith('ssi-silog-nearfield'):
-        # 🆕 SSI-Silog with Optional Near-Field Weighting
-        # Can enable/disable near-field weighting via enable_near_field_weighting parameter
-        from packnet_sfm.losses.ssi_silog_nearfield_loss import SSISilogNearFieldLossWrapper
-        return SSISilogNearFieldLossWrapper(
-            enable_near_field_weighting=kwargs.get('enable_near_field_weighting', True),
-            alpha=kwargs.get('alpha', 10.0),
-            silog_ratio=kwargs.get('silog_ratio', 0.85),
-            silog_ratio2=kwargs.get('silog_ratio2', 0.0),
-            ssi_weight=kwargs.get('ssi_weight', 0.7),
-            silog_weight=kwargs.get('silog_weight', 0.3),
-            min_depth=kwargs.get('min_depth', None),
-            max_depth=kwargs.get('max_depth', None),
-        )
-    elif supervised_method.endswith('ssi-silog-road-aware'):
-        # 🛣️ SSI-Silog with Road-Aware and Near-Field Weighting
-        # Prioritizes road pixels + near-field distance for autonomous driving
-        from packnet_sfm.losses.ssi_silog_road_aware_loss import SSISilogRoadAwareLossWrapper
-        return SSISilogRoadAwareLossWrapper(
-            enable_road_weighting=kwargs.get('enable_road_weighting', True),
-            alpha=kwargs.get('alpha', 10.0),
-            silog_ratio=kwargs.get('silog_ratio', 0.85),
-            silog_ratio2=kwargs.get('silog_ratio2', 0.0),
-            ssi_weight=kwargs.get('ssi_weight', 0.7),
-            silog_weight=kwargs.get('silog_weight', 0.3),
-            min_depth=kwargs.get('min_depth', None),
-            max_depth=kwargs.get('max_depth', None),
-            near_field_threshold=kwargs.get('near_field_threshold', 1.0),
-            road_weight=kwargs.get('road_weight', 5.0),
-            road_nearfield_weight=kwargs.get('road_nearfield_weight', 10.0),
-            nonroad_nearfield_weight=kwargs.get('nonroad_nearfield_weight', 3.0),
-        )
+    # elif supervised_method.endswith('ssi-silog-nearfield'):
+    #     # 🆕 SSI-Silog with Optional Near-Field Weighting
+    #     # Can enable/disable near-field weighting via enable_near_field_weighting parameter
+    #     # ❌ NOT IMPLEMENTED - module missing
+    #     from packnet_sfm.losses.ssi_silog_nearfield_loss import SSISilogNearFieldLossWrapper
+    #     return SSISilogNearFieldLossWrapper(
+    #         enable_near_field_weighting=kwargs.get('enable_near_field_weighting', True),
+    #         alpha=kwargs.get('alpha', 10.0),
+    #         silog_ratio=kwargs.get('silog_ratio', 0.85),
+    #         silog_ratio2=kwargs.get('silog_ratio2', 0.0),
+    #         ssi_weight=kwargs.get('ssi_weight', 0.7),
+    #         silog_weight=kwargs.get('silog_weight', 0.3),
+    #         min_depth=kwargs.get('min_depth', None),
+    #         max_depth=kwargs.get('max_depth', None),
+    #     )
+    # elif supervised_method.endswith('ssi-silog-road-aware'):
+    #     # 🛣️ SSI-Silog with Road-Aware and Near-Field Weighting
+    #     # Prioritizes road pixels + near-field distance for autonomous driving
+    #     # ❌ NOT IMPLEMENTED - module missing
+    #     from packnet_sfm.losses.ssi_silog_road_aware_loss import SSISilogRoadAwareLossWrapper
+    #     return SSISilogRoadAwareLossWrapper(
+    #         enable_road_weighting=kwargs.get('enable_road_weighting', True),
+    #         alpha=kwargs.get('alpha', 10.0),
+    #         silog_ratio=kwargs.get('silog_ratio', 0.85),
+    #         silog_ratio2=kwargs.get('silog_ratio2', 0.0),
+    #         ssi_weight=kwargs.get('ssi_weight', 0.7),
+    #         silog_weight=kwargs.get('silog_weight', 0.3),
+    #         min_depth=kwargs.get('min_depth', None),
+    #         max_depth=kwargs.get('max_depth', None),
+    #         near_field_threshold=kwargs.get('near_field_threshold', 1.0),
+    #         road_weight=kwargs.get('road_weight', 5.0),
+    #         road_nearfield_weight=kwargs.get('road_nearfield_weight', 10.0),
+    #         nonroad_nearfield_weight=kwargs.get('nonroad_nearfield_weight', 3.0),
+    #     )
     elif supervised_method.endswith('silog'):
         return SilogLoss()
     elif supervised_method.endswith('abs_rel'):
@@ -140,84 +142,88 @@ def get_loss_func(supervised_method, **kwargs):
         return ProgressiveEnhancedSSILoss()
     elif supervised_method.endswith('ssi-trim'):
         return SSITrimLoss(trim=0.2, epsilon=1e-6)
-    elif supervised_method.endswith('scale-adaptive'):
-        return ScaleAdaptiveLoss(
-            lambda_sg=kwargs.get('lambda_sg', 0.5),
-            epsilon=kwargs.get('epsilon', 1e-8),
-            num_scales=kwargs.get('num_scales', 4),
-            use_absolute=kwargs.get('use_absolute', True),
-            use_inv_depth=kwargs.get('use_inv_depth', False),
-            min_depth=kwargs.get('min_depth', None),
-            max_depth=kwargs.get('max_depth', None),
-        )
-    elif supervised_method.endswith('adaptive-multi-domain'):
-        # 🆕 Adaptive Multi-Domain Loss with uncertainty-based weighting
-        # Combines ScaleAdaptiveLoss (structure) + SSISilogLoss (scale)
-        # Import here to avoid circular dependency
-        from packnet_sfm.losses.adaptive_multi_domain_loss import AdaptiveMultiDomainLossWrapper
-        return AdaptiveMultiDomainLossWrapper(
-            # ScaleAdaptiveLoss parameters
-            lambda_sg=kwargs.get('lambda_sg', 0.1),
-            num_scales=kwargs.get('num_scales', 4),
-            # SSISilogLoss parameters
-            ssi_weight=kwargs.get('ssi_weight', 0.7),
-            silog_weight=kwargs.get('silog_weight', 0.3),
-            alpha_ssi=kwargs.get('alpha_ssi', 0.85),
-            beta_silog=kwargs.get('beta_silog', 0.15),
-            # Common parameters
-            min_depth=kwargs.get('min_depth', 0.05),
-            max_depth=kwargs.get('max_depth', 100.0),
-        )
-    elif supervised_method.endswith('fixed-multi-domain'):
-        # 🆕 Fixed-Weight Multi-Domain Loss (STABLE BASELINE)
-        # Combines ScaleAdaptiveLoss (structure) + SSISilogLoss (scale)
-        # with fixed, manually tuned weights (no uncertainty learning)
-        # Import here to avoid circular dependency
-        from packnet_sfm.losses.fixed_multi_domain_loss import FixedMultiDomainLossWrapper
-        return FixedMultiDomainLossWrapper(
-            # Fixed weights (can be tuned via grid search)
-            w_structure=kwargs.get('w_structure', 0.4),
-            w_scale=kwargs.get('w_scale', 0.6),
-            # ScaleAdaptiveLoss parameters
-            lambda_sg=kwargs.get('lambda_sg', 0.1),
-            num_scales=kwargs.get('num_scales', 4),
-            use_absolute=kwargs.get('use_absolute', True),
-            use_inv_depth=kwargs.get('use_inv_depth', False),
-            # SSISilogLoss parameters
-            ssi_weight=kwargs.get('ssi_weight', 0.7),
-            silog_weight=kwargs.get('silog_weight', 0.3),
-            alpha_ssi=kwargs.get('alpha_ssi', 0.85),
-            beta_silog=kwargs.get('beta_silog', 0.15),
-            # Common parameters
-            min_depth=kwargs.get('min_depth', 0.05),
-            max_depth=kwargs.get('max_depth', 100.0),
-        )
-    elif supervised_method.endswith('distance-aware-multi-domain'):
-        # 🆕 Distance-Aware Multi-Domain Loss (PHASE 2: NEAR-FIELD FOCUSED)
-        # Applies distance-based weighting on top of fixed multi-domain loss
-        # CRITICAL: 5x weight for D < 1m (safety-critical range)
-        # Expected: D<1m abs_rel 0.028 → 0.018 (36% improvement)
-        from packnet_sfm.losses.distance_aware_loss import DistanceAwareMultiDomainLossWrapper
-        return DistanceAwareMultiDomainLossWrapper(
-            # Fixed domain weights (from Phase 1 best result: w40_60)
-            w_structure=kwargs.get('w_structure', 0.4),
-            w_scale=kwargs.get('w_scale', 0.6),
-            # Distance-based weights (optional custom ranges)
-            weight_ranges=kwargs.get('weight_ranges', None),  # None = use default
-            # ScaleAdaptiveLoss parameters
-            lambda_sg=kwargs.get('lambda_sg', 0.1),
-            num_scales=kwargs.get('num_scales', 4),
-            use_absolute=kwargs.get('use_absolute', True),
-            use_inv_depth=kwargs.get('use_inv_depth', False),
-            # SSISilogLoss parameters
-            ssi_weight=kwargs.get('ssi_weight', 0.7),
-            silog_weight=kwargs.get('silog_weight', 0.3),
-            alpha_ssi=kwargs.get('alpha_ssi', 0.85),
-            beta_silog=kwargs.get('beta_silog', 0.15),
-            # Common parameters
-            min_depth=kwargs.get('min_depth', 0.05),
-            max_depth=kwargs.get('max_depth', 100.0),
-        )
+    # elif supervised_method.endswith('scale-adaptive'):
+    #     # ❌ NOT IMPLEMENTED - module missing
+    #     return ScaleAdaptiveLoss(
+    #         lambda_sg=kwargs.get('lambda_sg', 0.5),
+    #         epsilon=kwargs.get('epsilon', 1e-8),
+    #         num_scales=kwargs.get('num_scales', 4),
+    #         use_absolute=kwargs.get('use_absolute', True),
+    #         use_inv_depth=kwargs.get('use_inv_depth', False),
+    #         min_depth=kwargs.get('min_depth', None),
+    #         max_depth=kwargs.get('max_depth', None),
+    #     )
+    # elif supervised_method.endswith('adaptive-multi-domain'):
+    #     # 🆕 Adaptive Multi-Domain Loss with uncertainty-based weighting
+    #     # Combines ScaleAdaptiveLoss (structure) + SSISilogLoss (scale)
+    #     # Import here to avoid circular dependency
+    #     # ❌ NOT IMPLEMENTED - module missing
+    #     from packnet_sfm.losses.adaptive_multi_domain_loss import AdaptiveMultiDomainLossWrapper
+    #     return AdaptiveMultiDomainLossWrapper(
+    #         # ScaleAdaptiveLoss parameters
+    #         lambda_sg=kwargs.get('lambda_sg', 0.1),
+    #         num_scales=kwargs.get('num_scales', 4),
+    #         # SSISilogLoss parameters
+    #         ssi_weight=kwargs.get('ssi_weight', 0.7),
+    #         silog_weight=kwargs.get('silog_weight', 0.3),
+    #         alpha_ssi=kwargs.get('alpha_ssi', 0.85),
+    #         beta_silog=kwargs.get('beta_silog', 0.15),
+    #         # Common parameters
+    #         min_depth=kwargs.get('min_depth', 0.05),
+    #         max_depth=kwargs.get('max_depth', 100.0),
+    #     )
+    # elif supervised_method.endswith('fixed-multi-domain'):
+    #     # 🆕 Fixed-Weight Multi-Domain Loss (STABLE BASELINE)
+    #     # Combines ScaleAdaptiveLoss (structure) + SSISilogLoss (scale)
+    #     # with fixed, manually tuned weights (no uncertainty learning)
+    #     # Import here to avoid circular dependency
+    #     # ❌ NOT IMPLEMENTED - module missing
+    #     from packnet_sfm.losses.fixed_multi_domain_loss import FixedMultiDomainLossWrapper
+    #     return FixedMultiDomainLossWrapper(
+    #         # Fixed weights (can be tuned via grid search)
+    #         w_structure=kwargs.get('w_structure', 0.4),
+    #         w_scale=kwargs.get('w_scale', 0.6),
+    #         # ScaleAdaptiveLoss parameters
+    #         lambda_sg=kwargs.get('lambda_sg', 0.1),
+    #         num_scales=kwargs.get('num_scales', 4),
+    #         use_absolute=kwargs.get('use_absolute', True),
+    #         use_inv_depth=kwargs.get('use_inv_depth', False),
+    #         # SSISilogLoss parameters
+    #         ssi_weight=kwargs.get('ssi_weight', 0.7),
+    #         silog_weight=kwargs.get('silog_weight', 0.3),
+    #         alpha_ssi=kwargs.get('alpha_ssi', 0.85),
+    #         beta_silog=kwargs.get('beta_silog', 0.15),
+    #         # Common parameters
+    #         min_depth=kwargs.get('min_depth', 0.05),
+    #         max_depth=kwargs.get('max_depth', 100.0),
+    #     )
+    # elif supervised_method.endswith('distance-aware-multi-domain'):
+    #     # 🆕 Distance-Aware Multi-Domain Loss (PHASE 2: NEAR-FIELD FOCUSED)
+    #     # Applies distance-based weighting on top of fixed multi-domain loss
+    #     # CRITICAL: 5x weight for D < 1m (safety-critical range)
+    #     # Expected: D<1m abs_rel 0.028 → 0.018 (36% improvement)
+    #     # ❌ NOT IMPLEMENTED - module missing
+    #     from packnet_sfm.losses.distance_aware_loss import DistanceAwareMultiDomainLossWrapper
+    #     return DistanceAwareMultiDomainLossWrapper(
+    #         # Fixed domain weights (from Phase 1 best result: w40_60)
+    #         w_structure=kwargs.get('w_structure', 0.4),
+    #         w_scale=kwargs.get('w_scale', 0.6),
+    #         # Distance-based weights (optional custom ranges)
+    #         weight_ranges=kwargs.get('weight_ranges', None),  # None = use default
+    #         # ScaleAdaptiveLoss parameters
+    #         lambda_sg=kwargs.get('lambda_sg', 0.1),
+    #         num_scales=kwargs.get('num_scales', 4),
+    #         use_absolute=kwargs.get('use_absolute', True),
+    #         use_inv_depth=kwargs.get('use_inv_depth', False),
+    #         # SSISilogLoss parameters
+    #         ssi_weight=kwargs.get('ssi_weight', 0.7),
+    #         silog_weight=kwargs.get('silog_weight', 0.3),
+    #         alpha_ssi=kwargs.get('alpha_ssi', 0.85),
+    #         beta_silog=kwargs.get('beta_silog', 0.15),
+    #         # Common parameters
+    #         min_depth=kwargs.get('min_depth', 0.05),
+    #         max_depth=kwargs.get('max_depth', 100.0),
+    #     )
     
     else:
         raise ValueError('Unknown supervised loss {}'.format(supervised_method))

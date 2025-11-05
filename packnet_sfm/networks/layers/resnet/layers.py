@@ -47,13 +47,19 @@ class Conv3x3(nn.Module):
 
         if use_refl:
             self.pad = nn.ReflectionPad2d(1)
+            self.conv = nn.Conv2d(int(in_channels), int(out_channels), 3)
         else:
-            self.pad = nn.ZeroPad2d(1)
-        self.conv = nn.Conv2d(int(in_channels), int(out_channels), 3)
+            # 🔧 ONNX 변환 최적화: Conv2d 내장 패딩 사용 (별도 Pad 레이어 불필요)
+            self.pad = None
+            self.conv = nn.Conv2d(int(in_channels), int(out_channels), 3, padding=1)
 
     def forward(self, x):
-        out = self.pad(x)
-        out = self.conv(out)
+        if self.pad is not None:
+            out = self.pad(x)
+            out = self.conv(out)
+        else:
+            # Conv2d 내장 패딩 사용
+            out = self.conv(x)
         return out
 
 
