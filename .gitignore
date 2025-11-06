@@ -50,7 +50,7 @@ eval_npu.py
 .github/
 ncdb-cls/
 outputs/
-docs/
+# docs/
 docs_md/
 ncdb-cls-sample/
 KITTI_tiny/
