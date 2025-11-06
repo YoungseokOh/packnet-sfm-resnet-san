@@ -151,7 +151,7 @@ configs/
 ### 사용하지 않는 scripts/ (레거시/실험)
 ```
 scripts/
-├── ref_*.py                         # ✅ 삭제됨 (Reference 코드)
+├── ref_*.py                         # 🔸 Reference 코드 (사용 안함, 백업 목적으로 보존)
 ├── check_mask.py                    # ✅ 삭제됨 (마스크 확인)
 ├── compare_*.py                     # ✅ 삭제됨 (비교 스크립트들)
 ├── analyze_*.py                     # ✅ 삭제됨 (분석 스크립트들)
@@ -203,10 +203,10 @@ scripts/EVALUATE_USAGE.md            # 🔸 평가 사용법 (오래됨)
 ### 삭제 가능 (CAN DELETE)
 - **실험 완료 스크립트**: ~30개 ✅ **삭제됨** (분석/디버깅/중복 스크립트)
 - **사용 안하는 configs**: ~15개 (DDAD, KITTI, YOLOv8, PackNet 등)
-- **사용 안하는 scripts**: ~20개 ✅ **삭제됨** (ref_*, analyze_*, compare_* 등)
+- **사용 안하는 scripts**: ~17개 (ref_* 제외, analyze_*, compare_* 등)
 - **오래된 문서/로그**: todo/ ✅ **삭제됨**, daily_work_log/
 
-**삭제 가능 파일 수**: 약 **15개** (전체의 약 5%)
+**삭제 가능 파일 수**: 약 **32개** (전체의 약 10%)
 
 ---
 
