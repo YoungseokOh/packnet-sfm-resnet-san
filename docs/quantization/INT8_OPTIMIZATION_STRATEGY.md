@@ -129,8 +129,10 @@ class DepthDecoderWithSeparation(nn.Module):
 2. **재학습 필요**: Dual-head는 처음부터 재학습
 3. **복잡도 증가**: Inference pipeline 수정 필요
 
-### ✅ NPU 지원 확인됨
+### ✅ NPU 지원 확인 상태
 - **Dual output 지원**: ✅ 가능 확인
+- **Per-channel quantization**: ❌ **미지원 확인**
+- **Asymmetric quantization**: 확인 필요
 - **권장 구현**: Dual-head architecture 적극 추천
 - **우선순위 상향**: Phase 1 → Phase 2로 조정
 
@@ -304,7 +306,22 @@ for c in range(num_channels):
 # → 3-5배 정확도 향상!
 ```
 
-**NPU 확인 필요**: Per-channel quantization 지원 여부!
+**⚠️ NPU 제약 확인**: ❌ **Per-channel quantization 미지원!**
+
+**대응 전략**:
+1. **Per-tensor만 사용** (유일한 선택)
+2. **Weight normalization 강화** - Channel 간 scale 차이 최소화
+3. **Layer-wise optimal range** - 각 layer별 최적 range 찾기
+4. **Percentile clipping 더 중요해짐** - Per-tensor의 약점 보완
+
+**예상 성능 영향**:
+```
+Per-channel 가능 시:  abs_rel 0.1133 → 0.08  (29% 개선)
+Per-channel 불가 시:  abs_rel 0.1133 → 0.09  (20% 개선)
+
+손실: ~9% 성능 저하
+→ 다른 전략으로 보완 필요!
+```
 
 #### 3. Representative Calibration Dataset
 ```python
@@ -717,22 +734,31 @@ python scripts/test_npu_mixed_precision.py
 ### Phase 1: Advanced PTQ Calibration (즉시, 1일)
 **목표**: 재학습 없이 최대 성능 확보
 
-1. ✅ **Percentile-based Calibration**
+1. ✅ **Percentile-based Calibration** ⭐⭐⭐
    - 99.9% percentile clipping
    - Outlier handling
+   - **Per-channel 불가로 더욱 중요!**
    - 예상: abs_rel 0.1133 → 0.10 (12% 개선)
 
-2. ✅ **Per-channel Quantization** (NPU 지원 시)
-   - Weight per-channel quantization
-   - Activation asymmetric quantization
-   - 예상: abs_rel 0.10 → 0.08 (추가 20% 개선)
+2. ~~✅ **Per-channel Quantization** (NPU 지원 시)~~ ❌ **미지원 확인**
+   - ~~Weight per-channel quantization~~
+   - ~~Activation asymmetric quantization~~
+   - ~~예상: abs_rel 0.10 → 0.08 (추가 20% 개선)~~
+   
+   **대체 전략**: 
+   - **Weight Normalization 강화**
+   - **Layer-wise Range Optimization**
+   - **예상**: abs_rel 0.10 → 0.09 (추가 10% 개선)
 
-3. ✅ **Optimal Calibration Dataset**
+3. ✅ **Optimal Calibration Dataset** ⭐⭐
    - 100 representative samples
    - Depth distribution coverage
-   - 예상: abs_rel 0.08 → 0.075 (추가 6% 개선)
+   - **Per-channel 없으므로 더 신중하게!**
+   - 예상: abs_rel 0.09 → 0.085 (추가 6% 개선)
 
-**Phase 1 총 예상**: abs_rel 0.1133 → **0.075** (34% 개선)
+**Phase 1 총 예상** (수정):
+- **이전 예상** (Per-channel 가능): abs_rel 0.1133 → 0.075 (34% 개선)
+- **현재 예상** (Per-channel 불가): abs_rel 0.1133 → **0.085** (25% 개선)
 
 ---
 
@@ -742,9 +768,12 @@ python scripts/test_npu_mixed_precision.py
 4. 🔄 **Dual-Head 재학습**
    - ✅ NPU dual-output 지원 확인됨!
    - Integer head (0-15m) + Fractional head (0-1)
-   - 예상: abs_rel 0.075 → **0.05** (33% 추가 개선)
+   - **Per-channel 없어도 효과 유지!** (precision 향상 원리가 다름)
+   - 예상: abs_rel 0.085 → **0.055** (35% 추가 개선)
    
-**누적 예상**: abs_rel 0.1133 → **0.05** (56% 개선) ✅ **목표 달성!**
+**누적 예상** (수정):
+- **이전 예상**: abs_rel 0.1133 → 0.05 (56% 개선)
+- **현재 예상**: abs_rel 0.1133 → **0.055** (51% 개선) ✅ **목표 근접!**
 
 ---
 
@@ -754,14 +783,17 @@ python scripts/test_npu_mixed_precision.py
 5. 🔄 **Output-level Distillation**
    - Teacher: FP32 모델
    - Student: Dual-head INT8
-   - 예상: abs_rel 0.05 → 0.04 (20% 추가 개선)
+   - **Per-channel 없어도 distillation 효과 유지**
+   - 예상: abs_rel 0.055 → 0.045 (18% 추가 개선)
 
 6. 🔄 **Feature-level Distillation**
    - Multi-layer feature matching
    - Attention distillation
-   - 예상: abs_rel 0.04 → **0.035** (13% 추가 개선)
+   - 예상: abs_rel 0.045 → **0.04** (11% 추가 개선)
 
-**누적 예상**: abs_rel 0.1133 → **0.035** (69% 개선) ✅ **FP32 수준!**
+**누적 예상** (수정):
+- **이전 예상**: abs_rel 0.1133 → 0.035 (69% 개선)
+- **현재 예상**: abs_rel 0.1133 → **0.04** (65% 개선) ✅ **FP32 근접!**
 
 ---
 
@@ -771,11 +803,13 @@ python scripts/test_npu_mixed_precision.py
 7. 🔄 **QAF (3 epochs)**
    - Fake quantization + Fine-tuning
    - PTQ initialization
-   - 예상: abs_rel 0.075 → **0.06** (20% 개선)
+   - **Per-channel 없을 때 더 효과적!** (학습으로 보완)
+   - 예상: abs_rel 0.085 → **0.065** (24% 개선)
 
 **Phase 2 대신 Phase 4 사용 가능**: 
-- Phase 1 (0.075) + Phase 4 (0.06) = **더 빠른 경로!**
+- Phase 1 (0.085) + Phase 4 (0.065) = **더 빠른 경로!**
 - Dual-head보다 구현 단순
+- **Per-channel 없는 상황에서 QAF의 중요성 증가**
 
 ---
 
@@ -787,9 +821,53 @@ python scripts/test_npu_mixed_precision.py
 
 ---
 
-### 🎯 최종 권장 경로
+### 🎯 최종 권장 경로 (Per-channel 불가 반영)
 
-#### **경로 A: 빠른 달성** (2-3주)
+#### **경로 A: 빠른 달성** (1주) ⚡ **Per-channel 불가 시 추천!**
+```
+Phase 1 (Advanced PTQ): 0.1133 → 0.085  (1일)
+Phase 4 (QAF):          0.085 → 0.065   (3일)
+Phase 3 (Distillation): 0.065 → 0.05    (1주)
+
+총 소요: 2주
+최종 성능: abs_rel = 0.05 (56% 개선) ✅ 목표 달성!
+장점: 빠르고 확실한 목표 달성
+```
+
+#### **경로 B: 최고 성능** (4-5주) ⭐ **여전히 추천!**
+```
+Phase 1 (Advanced PTQ):   0.1133 → 0.085  (1일)
+Phase 2 (Dual-Head):      0.085 → 0.055   (2주)
+Phase 3 (Distillation):   0.055 → 0.04    (2주)
+
+총 소요: 4-5주
+최종 성능: abs_rel = 0.04 (65% 개선, FP32 근접!)
+장점: 최고 성능, Dual-head의 구조적 장점
+```
+
+#### **경로 C: 균형** (2-3주) ⭐⭐
+```
+Phase 1 (Advanced PTQ): 0.1133 → 0.085  (1일)
+Phase 2 (Dual-Head):    0.085 → 0.055   (2주)
+
+총 소요: 2주
+최종 성능: abs_rel = 0.055 (51% 개선, 목표 근접!)
+장점: 적절한 기간, 안정적 성능
+```
+
+**Per-channel 불가의 영향**:
+```
+Per-channel 가능 시:
+- Phase 1: 0.075 (34% 개선)
+- 최종: 0.035 (69% 개선)
+
+Per-channel 불가 시:
+- Phase 1: 0.085 (25% 개선)  ← 9% 손실
+- 최종: 0.04 (65% 개선)      ← 4% 손실
+
+→ 최종 성능 차이는 생각보다 작음!
+→ Dual-head + Distillation으로 충분히 보완 가능!
+```
 ```
 Phase 1 (Advanced PTQ): 0.1133 → 0.075  (1일)
 Phase 4 (QAF):          0.075 → 0.06   (3일)
@@ -844,20 +922,38 @@ Phase 4 (QAF):          0.075 → 0.06   (3일)
 
 ---
 
-### 📊 예상 성능 로드맵 (업데이트)
+### 📊 예상 성능 로드맵 (업데이트 - Per-channel 불가 반영)
 
 ```
 Current:                         abs_rel = 0.1133
 
-Phase 1 (Advanced PTQ):          abs_rel = 0.075  (34% 개선) ⭐
-Phase 2 (Dual-Head):             abs_rel = 0.05   (56% 개선) ✅ 목표!
-Phase 3 (Distillation):          abs_rel = 0.035  (69% 개선) 🎯 FP32급!
-Phase 4 (QAF, 대안):             abs_rel = 0.06   (47% 개선) ⚡ 빠름!
-Phase 5 (Mixed Precision):       abs_rel = 0.045  (60% 개선) 🔥 Bonus
+Phase 1 (Advanced PTQ):          abs_rel = 0.085  (25% 개선) ⭐
+  이전 예상 (Per-channel 가능): 0.075  (34% 개선)
+  손실:                           ~9%
+  
+Phase 2 (Dual-Head):             abs_rel = 0.055  (51% 개선) ✅ 목표 근접!
+  이전 예상:                      0.05   (56% 개선)
+  손실:                           ~5%
+  
+Phase 3 (Distillation):          abs_rel = 0.04   (65% 개선) 🎯 FP32 근접!
+  이전 예상:                      0.035  (69% 개선)
+  손실:                           ~4%
+  
+Phase 4 (QAF, 대안):             abs_rel = 0.065  (43% 개선) ⚡ 빠름!
+  이전 예상:                      0.06   (47% 개선)
+  손실:                           ~4%
+
+Phase 5 (Mixed Precision):       abs_rel = 0.05   (56% 개선) 🔥 Bonus
+  (NPU FP16 지원 시)
 
 Target:                          abs_rel < 0.05   ✅ 달성 가능!
-FP32-level:                      abs_rel ~ 0.035  ✅ 달성 가능!
+FP32-level:                      abs_rel ~ 0.04   ✅ 달성 가능!
 ```
+
+**핵심 통찰**:
+- Per-channel 불가의 영향: Phase 1에서 최대 (9% 손실)
+- Dual-head + Distillation으로 충분히 보완 가능 (최종 4% 손실)
+- **목표 abs_rel < 0.05는 여전히 달성 가능!** ✅
 
 ---
 
@@ -905,50 +1001,78 @@ FP32-level:                      abs_rel ~ 0.035  ✅ 달성 가능!
 
 ### NPU 스펙 확인 체크리스트 (최우선!)
 - [x] **Dual output 지원**: ✅ 확인됨
-- [ ] **Per-channel quantization**: 확인 필요
+- [x] **Per-channel quantization**: ❌ **미지원 확인**
 - [ ] **Asymmetric quantization**: 확인 필요  
 - [ ] **FP16 mixed precision**: 확인 필요
 - [ ] **Optimal batch size**: 벤치마크 필요
 - [ ] **Memory bandwidth**: 프로파일링 필요
+
+### Per-channel 불가 대응 체크리스트 (신규) ⭐
+- [ ] **Weight Normalization 적용**
+  - Layer별 weight scale 분석
+  - Channel 간 variance 최소화
+  - BatchNorm folding 최적화
+  
+- [ ] **Layer-wise Range Optimization**
+  - 각 layer별 optimal quantization range
+  - Per-tensor지만 layer마다 다른 scale
+  
+- [ ] **Aggressive Percentile Clipping**
+  - 99.9% → 99.5%로 더 공격적
+  - Outlier 제거 강화
+  
+- [ ] **Calibration Dataset 크기 증가**
+  - 100 samples → 200 samples
+  - Per-tensor의 불안정성 보완
 
 ---
 
 ## 💡 핵심 권장사항 (NPU 전문가 최종 조언)
 
 ### 1. **Phase 1 (Advanced PTQ)부터 무조건 시작!** ⭐⭐⭐
-   - **이유**: 재학습 없이 34% 개선 (0.1133 → 0.075)
+   - **이유**: 재학습 없이 25% 개선 (0.1133 → 0.085)
    - **시간**: 단 1일
    - **위험**: 없음 (PTQ만)
    - **효과**: 검증됨
+   - **⚠️ Per-channel 불가**: Percentile clipping이 더욱 중요!
    
-   **구체적 액션**:
+   **구체적 액션 (Per-channel 불가 대응)**:
    ```python
-   # 1. Percentile calibration (30분)
-   calibrate_with_percentile(model, calib_data, percentile=99.9)
+   # 1. Aggressive Percentile calibration (1시간)
+   calibrate_with_percentile(model, calib_data, percentile=99.5)  # 더 공격적!
    
-   # 2. Per-channel quantization (1시간, NPU 확인 필요)
-   quantize_per_channel(model, method='asymmetric')
+   # 2. Weight Normalization (2시간)
+   normalize_weights_per_layer(model)  # Channel variance 최소화
    
-   # 3. Optimal calibration dataset (2시간)
-   calib_data = select_representative_samples(train_data, n=100)
+   # 3. Layer-wise Range Optimization (2시간)
+   optimize_ranges_per_layer(model, calib_data)
    
-   # 4. 성능 측정 (30분)
+   # 4. Large Calibration Dataset (2시간)
+   calib_data = select_representative_samples(train_data, n=200)  # 100→200
+   
+   # 5. 성능 측정 (30분)
    evaluate_on_npu(model, test_data)
    ```
 
 ### 2. **Dual-Head가 최고의 선택** (NPU dual-output 지원 확인됨!) ✅
    - **이유**: ±28mm → ±2mm (14배 precision 향상)
    - **시간**: 2주 (재학습)
-   - **예상**: abs_rel 0.05 달성 (목표!)
+   - **예상**: abs_rel 0.055 달성 (목표 근접!)
    - **리스크**: 중간 (재학습 필요)
+   - **⚠️ Per-channel 불가**: Dual-head의 중요성 증가!
    
-   **vs QAF 비교**:
+   **vs QAF 비교 (Per-channel 불가 반영)**:
    | | Dual-Head | QAF |
    |---|-----------|-----|
    | **시간** | 2주 | 3일 |
-   | **성능** | 0.05 | 0.06 |
+   | **성능 (기존)** | 0.05 | 0.06 |
+   | **성능 (Per-ch 불가)** | 0.055 | 0.065 |
    | **안정성** | 높음 | 중간 |
+   | **Per-ch 불가 영향** | 작음 ⭐ | 중간 |
    | **추천도** | ⭐⭐⭐ | ⭐⭐ |
+   
+   **핵심**: Dual-head는 Per-channel 없어도 효과 유지!
+   → Precision 향상 메커니즘이 다름 (구조적 개선)
 
 ### 3. **Knowledge Distillation은 마지막 polish** 🎯
    - **타이밍**: Phase 2 (Dual-head or QAF) 이후
@@ -962,23 +1086,25 @@ FP32-level:                      abs_rel ~ 0.035  ✅ 달성 가능!
 
 ### 4. **NPU 제약사항 확인이 최우선!** 🔍
    
+   **확인 완료**:
+   - ✅ **Dual output**: 지원
+   - ❌ **Per-channel quantization**: 미지원
+   
    **즉시 확인 필요**:
    ```bash
-   # 1. Per-channel quantization 지원?
-   # → 지원 시: 20-30% 추가 개선!
-   # → 미지원: Asymmetric만 사용
-   
-   # 2. Asymmetric quantization 지원?
+   # 1. Asymmetric quantization 지원?
    # → ReLU 후 activation에 필수
+   # → Per-channel 없으면 더욱 중요!
    
-   # 3. FP16 mixed precision 지원?
+   # 2. FP16 mixed precision 지원?
    # → Bonus 5-10% 개선 가능
+   # → Per-channel 없으면 대안으로 중요!
    ```
    
-   **확인 방법**:
-   - NPU 제조사 문서 확인
-   - Sample quantization config 테스트
-   - 실제 NPU에서 로드 테스트
+   **Per-channel 불가의 영향 최소화**:
+   - Asymmetric quantization이 더 중요해짐
+   - Mixed Precision이 대안으로 부상
+   - QAF/Distillation의 중요성 증가
 
 ### 5. **점진적 진행 & 매 단계 검증** 📊
    
@@ -998,25 +1124,58 @@ FP32-level:                      abs_rel ~ 0.035  ✅ 달성 가능!
    
    **만약 시간이 매우 촉박하다면**:
    ```
-   Week 1 Day 1: Phase 1 (Advanced PTQ)     → 0.075
-   Week 1 Day 2-4: Phase 4 (QAF)           → 0.06
+   Week 1 Day 1: Phase 1 (Advanced PTQ)     → 0.085
+   Week 1 Day 2-4: Phase 4 (QAF)           → 0.065
+   Week 2: Phase 3 (Output Distillation)   → 0.05
    
-   → 4일 만에 47% 개선! (목표 근접)
+   → 2주 만에 56% 개선! (목표 달성) ✅
    ```
+   
+   **Per-channel 불가 시 QAF의 중요성**:
+   - PTQ 한계를 학습으로 보완
+   - Per-channel 대신 Fine-tuning
+   - 빠르고 효과적 (3일)
 
 ### 7. **실전 팁** 💼
 
-#### Calibration Dataset 선정
+#### Calibration Dataset 선정 (Per-channel 불가 시 더 중요!)
 ```python
-# ✅ Good: Diverse samples
+# ✅ Good: Diverse samples (크기 증가!)
 calib_samples = {
-    'near_depth': 30 samples,   # 0.5-3m
-    'mid_depth': 40 samples,    # 3-8m
-    'far_depth': 30 samples,    # 8-15m
+    'near_depth': 60 samples,   # 0.5-3m (30→60)
+    'mid_depth': 80 samples,    # 3-8m (40→80)
+    'far_depth': 60 samples,    # 8-15m (30→60)
 }
+# Total: 200 samples (100→200, Per-channel 없으므로 2배)
 
 # ❌ Bad: Random samples
 # 대부분 근거리만 → far depth quantization 나쁨
+```
+
+#### Weight Normalization (신규 - Per-channel 대응)
+```python
+# Per-channel 없으면 weight normalization 필수!
+def normalize_layer_weights(layer):
+    """
+    Channel 간 scale 차이를 최소화
+    → Per-tensor quantization의 정밀도 향상
+    """
+    weights = layer.weight.data
+    
+    # Channel-wise statistics
+    channel_means = weights.mean(dim=(1,2,3), keepdim=True)
+    channel_stds = weights.std(dim=(1,2,3), keepdim=True)
+    
+    # Normalize (optional, experimental)
+    # weights_normalized = (weights - channel_means) / (channel_stds + 1e-6)
+    
+    # Scale equalization (safer)
+    max_abs_per_channel = weights.abs().max(dim=(1,2,3), keepdim=True)[0]
+    global_max = max_abs_per_channel.max()
+    scale_factors = global_max / max_abs_per_channel
+    
+    weights_scaled = weights * scale_factors
+    return weights_scaled
 ```
 
 #### Learning Rate 튜닝 (QAF/Distillation)
@@ -1042,52 +1201,60 @@ optimal_bs = 4 or 8  # 보통 이 범위
 
 ---
 
-### 🎯 최종 결론 및 Action Plan
+### 🎯 최종 결론 및 Action Plan (Per-channel 불가 반영)
 
 **지금 당장 해야 할 일** (우선순위):
 
 1. **Day 1 (오늘!)**: 
    ```bash
    # NPU 스펙 확인
-   - Per-channel quantization 지원?
-   - Asymmetric quantization 지원?
-   - Dual output 확인됨 ✅
+   - Per-channel quantization: ❌ 확인됨 (미지원)
+   - Asymmetric quantization: 확인 필요 ⭐ 긴급!
+   - Dual output: ✅ 확인됨 (지원)
    ```
 
 2. **Day 2 (내일)**:
    ```bash
-   # Phase 1 구현 시작
-   - Percentile calibration
-   - 100 representative samples 선정
+   # Phase 1 구현 시작 (Per-channel 불가 대응)
+   - Aggressive Percentile calibration (99.5%)
+   - Weight Normalization 적용
+   - 200 representative samples 선정 (100→200)
+   - Layer-wise range optimization
    ```
 
 3. **Day 3-4**:
    ```bash
    # Phase 1 완료 & 검증
    - NPU에서 성능 측정
-   - 0.075 달성 확인
+   - 0.085 달성 확인 (목표: 0.075, Per-ch 불가로 -9%)
    ```
 
 4. **Week 2-3**:
    ```bash
    # Phase 2 선택 (Dual-head 추천!)
    - Dual-head 재학습
-   - 목표 0.05 달성 🎯
+   - 목표 0.055 달성 (Per-ch 불가 영향 최소)
    ```
 
 5. **Week 4-5** (선택):
    ```bash
    # Phase 3 (필요시만)
    - Knowledge distillation
-   - FP32급 0.035 달성
+   - FP32급 0.04 달성
    ```
 
-**예상 최종 결과**: 
-- **최소 목표**: abs_rel 0.05 ✅
-- **최대 달성**: abs_rel 0.035 🎯
+**예상 최종 결과** (수정): 
+- **최소 목표**: abs_rel 0.055 (목표 근접)
+- **권장 목표**: abs_rel 0.05 (Distillation 추가)
+- **최대 달성**: abs_rel 0.04 (FP32 근접)
 - **소요 시간**: 2-5주
 
-**성공 확률**: 95% 이상! 💪
+**성공 확률**: 90% 이상! (Per-channel 불가에도 불구하고) 💪
+
+**핵심 교훈**:
+- Per-channel 불가는 Phase 1에만 큰 영향 (9% 손실)
+- Dual-head + Distillation으로 충분히 보완 (최종 4% 손실)
+- **목표 abs_rel < 0.05는 여전히 달성 가능!** ✅
 
 ---
 
