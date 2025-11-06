@@ -151,19 +151,27 @@ configs/
 ### 사용하지 않는 scripts/ (레거시/실험)
 ```
 scripts/
-├── ref_*.py                         # 🔸 Reference 코드 (사용 안함)
-├── check_mask.py                    # 🔸 마스크 확인 (개발용)
-├── compare_*.py                     # 🔸 비교 스크립트들 (일회성 분석)
-├── analyze_*.py                     # 🔸 분석 스크립트들 (일회성)
-├── visualize_*.py                   # 🔸 시각화 스크립트들 (루트에 최신 버전)
-├── convert_png_to_jpg.py            # 🔸 변환 유틸 (필요시 재생성)
-├── create_kitti_sample.py           # 🔸 KITTI 샘플 (사용 안함)
-├── create_ncdb_sample.py            # 🔸 NCDB 샘플 생성 (일회성)
-├── create_vadas_lookup_table.py     # 🔸 VADAS LUT (사용 안함)
-├── advanced_verify.py               # 🔸 검증 스크립트 (개발용)
-├── verify_*.py                      # 🔸 검증 스크립트들 (개발용)
-├── update_split_paths.py            # 🔸 Split 경로 업데이트 (일회성)
-└── check_yolov8_model_type.py       # 🔸 YOLOv8 확인 (사용 안함)
+├── ref_*.py                         # ✅ 삭제됨 (Reference 코드)
+├── check_mask.py                    # ✅ 삭제됨 (마스크 확인)
+├── compare_*.py                     # ✅ 삭제됨 (비교 스크립트들)
+├── analyze_*.py                     # ✅ 삭제됨 (분석 스크립트들)
+├── visualize_*.py                   # ✅ 삭제됨 (구 시각화, visualize_fp32_vs_int8_comparison.py 제외)
+├── convert_png_to_jpg.py            # ✅ 삭제됨 (변환 유틸)
+├── create_kitti_sample.py           # ✅ 삭제됨 (KITTI 샘플)
+├── create_ncdb_sample.py            # ✅ 삭제됨 (NCDB 샘플)
+├── create_vadas_lookup_table.py     # ✅ 삭제됨 (VADAS LUT)
+├── advanced_verify.py               # ✅ 삭제됨 (고급 검증)
+├── verify_*.py                      # ✅ 삭제됨 (검증 스크립트들)
+├── update_split_paths.py            # ✅ 삭제됨 (Split 경로 업데이트)
+├── check_yolov8_model_type.py       # ✅ 삭제됨 (YOLOv8 확인)
+├── eval_onnx.py                     # ✅ 삭제됨 (ONNX 평가)
+├── eval_pytorch_onnx_comparison.py  # ✅ 삭제됨 (PyTorch-ONNX 비교)
+├── evaluate_depth_maps.py           # ✅ 삭제됨 (Depth map 평가)
+├── evaluate_ncdb_*.py               # ✅ 삭제됨 (NCDB 평가 스크립트들)
+├── infer_ncdb.py                    # ✅ 삭제됨 (NCDB inference)
+├── prepare_data.py                  # ✅ 삭제됨 (데이터 준비)
+├── create_depth_maps.py             # ✅ 삭제됨 (Depth map 생성)
+└── EVALUATE_USAGE.md                # ✅ 삭제됨 (평가 사용법 문서)
 ```
 
 ### 문서/로그 (정리 가능)
@@ -195,10 +203,10 @@ scripts/EVALUATE_USAGE.md            # 🔸 평가 사용법 (오래됨)
 ### 삭제 가능 (CAN DELETE)
 - **실험 완료 스크립트**: ~30개 ✅ **삭제됨** (분석/디버깅/중복 스크립트)
 - **사용 안하는 configs**: ~15개 (DDAD, KITTI, YOLOv8, PackNet 등)
-- **사용 안하는 scripts**: ~20개 (ref_*, analyze_*, compare_* 등)
+- **사용 안하는 scripts**: ~20개 ✅ **삭제됨** (ref_*, analyze_*, compare_* 등)
 - **오래된 문서/로그**: todo/ ✅ **삭제됨**, daily_work_log/
 
-**삭제 가능 파일 수**: 약 **35-40개** (전체의 약 10-15%)
+**삭제 가능 파일 수**: 약 **15개** (전체의 약 5%)
 
 ---
 
