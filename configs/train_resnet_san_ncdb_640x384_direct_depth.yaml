@@ -1,0 +1,122 @@
+model:
+    name: 'SemiSupCompletionModel'
+    loss:
+        supervised_method: 'sparse-ssi-silog'
+        supervised_num_scales: 1
+        supervised_loss_weight: 1.0
+        # 🆕 Direct depth mode settings
+        min_depth: 0.5
+        max_depth: 15.0
+        input_mode: 'depth'  # ✅ NEW! Enable direct depth input to loss
+        # 🔧 CRITICAL: Reduce SSI weight for depth space
+        # depth space has ~200x larger variance than inv_depth
+        # Original: ssi=0.7, silog=0.3 (for inv_depth)
+        # Adjusted: ssi=0.05, silog=0.95 (for depth space)
+        ssi_weight: 0.05  # Reduced from 0.7 to compensate for larger variance
+        silog_weight: 0.95  # Increased from 0.3
+    optimizer:
+        name: 'Adam'
+        depth:
+            lr: 0.0001
+        pose:
+            lr: 0.0001
+    scheduler:
+        name: 'StepLR'
+        step_size: 40
+        gamma: 0.5
+    depth_net:
+        name: 'ResNetSAN01'
+        version: '18A'
+        dropout: 0.1
+        use_film: false
+        film_scales: [0]
+        use_enhanced_lidar: false
+        # 🆕 Direct depth output settings
+        depth_output_mode: 'direct'  # ✅ NEW! Enable Direct Linear depth output
+        min_depth: 0.5
+        max_depth: 15.0
+    params:
+        crop: ''
+        min_depth: 0.5
+        max_depth: 15.0
+        scale_output: 'top-center'
+        use_log_space: false
+
+datasets:
+  augmentation:
+    image_shape: [384, 640]
+  train:
+    dataset: ['ncdb']
+    path: ['/workspace/data/ncdb-cls-640x384']
+    split: ['splits/combined_train.json']
+    mask_file: ['binary_mask.png']
+    use_mask: [false]
+  validation:
+    dataset: ['ncdb']
+    path: ['/workspace/data/ncdb-cls-640x384']
+    split: ['splits/combined_val.json']
+    mask_file: ['binary_mask.png']
+    use_mask: [false]
+  test:
+    dataset: ['ncdb']
+    path: ['/workspace/data/ncdb-cls-640x384']
+    split: ['splits/combined_test.json']
+    mask_file: ['binary_mask.png']
+    use_mask: [false]
+
+arch:
+    seed: 42
+    validate_first: false
+    clip_grad: 10.0
+    max_epochs: 30
+    eval_during_training: true
+    eval_progress_interval: 0.25
+    eval_subset_size: 50
+
+checkpoint:
+    filepath: 'checkpoints/resnetsan01_direct_depth_05_15/'
+    save_top_k: -1
+
+save:
+    folder: 'outputs/resnetsan01_direct_depth_05_15/'
+
+tensorboard:
+    dry_run: false
+    log_frequency: 10
+
+# 🎯 Direct Linear Depth Training Configuration
+# ================================================
+# 
+# 🔧 Key Changes from Bounded Inverse Training:
+# 
+# 1. Model Output:
+#    - Bounded Inverse: depth = 1 / (inv_min + (inv_max - inv_min) × sigmoid)
+#    - Direct Linear: depth = min_depth + (max_depth - min_depth) × sigmoid
+# 
+# 2. Loss Computation:
+#    - Bounded Inverse: Receives inv_depth, converts to depth for Silog
+#    - Direct Linear: Receives depth, converts to inv_depth for SSI
+# 
+# 3. INT8 Quantization Error:
+#    - Bounded Inverse @ 15m: ~853mm ❌
+#    - Direct Linear @ 15m: ~28mm ✅ (30x better!)
+# 
+# 4. Expected Performance:
+#    - FP32 abs_rel: ~0.032 (similar to Bounded Inverse)
+#    - INT8 abs_rel: ~0.035 (vs 0.114 with Bounded Inverse)
+# 
+# 📊 Mathematical Justification:
+# ================================
+# 
+# INT8 Resolution Calculation:
+#   - Range: 15.0 - 0.5 = 14.5m
+#   - Steps: 255
+#   - Resolution: 14.5 / 255 = 0.0569m = 56.9mm
+#   - Max error: ±28.4mm (uniform across all depths)
+# 
+# Bounded Inverse Error @ 15m:
+#   - |∂depth/∂sigmoid| = (max - min) × (inv_max - inv_min) / sigmoid² ≈ 434.6
+#   - Quantization error: 434.6 / 255 = 1.706m per step
+#   - Max error: ~853mm
+# 
+# ✅ Conclusion: Direct Linear gives 30x better INT8 accuracy

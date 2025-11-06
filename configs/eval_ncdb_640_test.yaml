@@ -1,0 +1,14 @@
+datasets:
+  augmentation:
+    image_shape: [384, 640]
+  test:
+    dataset: ['ncdb']
+    path: ['/workspace/data/ncdb-cls-640x384']
+    split: ['splits/combined_test.json']
+    mask_file: ['binary_mask.png']
+    use_mask: [false]
+    
+arch:
+  validate_first: false
+  eval_during_training: false
+  eval_subset_size: 0  # 0 = all images

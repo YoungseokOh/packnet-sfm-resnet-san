@@ -92,9 +92,11 @@ def get_loss_func(supervised_method, **kwargs):
         return BerHuLoss()
     elif supervised_method.endswith('ssi-silog'):
         # 🆕 클래스 기반 SSI-Silog 손실 (선택적으로 YAML min/max depth 전달)
+        # input_mode: 'inv_depth' (legacy, default) or 'depth' (direct depth output)
         return SSISilogLoss(
             min_depth=kwargs.get('min_depth', None),
             max_depth=kwargs.get('max_depth', None),
+            input_mode=kwargs.get('input_mode', 'inv_depth'),  # Default to legacy mode
         )
     # elif supervised_method.endswith('ssi-silog-nearfield'):
     #     # 🆕 SSI-Silog with Optional Near-Field Weighting

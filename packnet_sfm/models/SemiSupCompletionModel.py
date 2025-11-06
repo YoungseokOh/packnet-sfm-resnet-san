@@ -454,42 +454,80 @@ class SemiSupCompletionModel(SelfSupModel):
                     batch['depth'] = d  # 그대로 유지
             # ====================================================================
 
-            # ✅ CRITICAL FIX: Convert sigmoid to bounded inverse depth
-            # Model outputs sigmoid [0, 1], but we need to convert it to
-            # inverse depth [1/max_depth, 1/min_depth] to match evaluation!
-            # 🆕 Now supports both LINEAR and LOG space interpolation!
-            from packnet_sfm.utils.post_process_depth import sigmoid_to_inv_depth
+            # ✅ CRITICAL: Check if model outputs direct depth or sigmoid
+            # ResNetSAN01 with depth_output_mode='direct' outputs depth directly
+            # ResNetSAN01 with depth_output_mode='sigmoid' outputs sigmoid [0,1]
             
-            # Convert sigmoid outputs to bounded inverse depth
-            sigmoid_outputs = self_sup_output['inv_depths']
-            bounded_inv_depths = [
-                sigmoid_to_inv_depth(sig, self.min_depth, self.max_depth, use_log_space=self.use_log_space)
-                for sig in sigmoid_outputs
-            ]
+            # Check if depth_net has depth_output_mode attribute
+            depth_output_mode = getattr(self.depth_net, 'depth_output_mode', 'sigmoid')
+            
+            if depth_output_mode == 'direct':
+                # 🆕 Direct Depth Mode: Model already outputs depth values!
+                depth_outputs = self_sup_output['inv_depths']  # Actually contains depth!
+                
+                # Log only once
+                if not hasattr(self, '_direct_mode_logged'):
+                    print(f"\n[SemiSupCompletionModel] Direct Depth Mode")
+                    print(f"   Model outputs depth directly")
+                    print(f"   Passing depth to loss (input_mode='depth')")
+                    self._direct_mode_logged = True
+                
+            else:
+                # ✅ Legacy Sigmoid Mode: Model outputs sigmoid [0,1]
+                # Convert sigmoid outputs to bounded inverse depth
+                from packnet_sfm.utils.post_process_depth import sigmoid_to_inv_depth
+                
+                sigmoid_outputs = self_sup_output['inv_depths']
+                bounded_inv_depths = [
+                    sigmoid_to_inv_depth(sig, self.min_depth, self.max_depth, use_log_space=self.use_log_space)
+                    for sig in sigmoid_outputs
+                ]
             
             # (호출 형태 그대로) supervised loss
-            # ✅ GT depth를 inverse depth로 변환하여 전달 (inverse depth 도메인에서 비교)
-            sup_output = self.supervised_loss(
-                bounded_inv_depths, depth2inv(batch['depth']),
-                return_logs=return_logs, progress=progress)
+            # 🆕 CRITICAL: For direct depth mode, pass depth directly to loss!
+            if depth_output_mode == 'direct':
+                # Direct depth mode: Pass depth values directly to loss
+                # Loss function will handle it based on input_mode='depth'
+                sup_output = self.supervised_loss(
+                    depth_outputs, batch['depth'],  # Pass depth, not inv_depth!
+                    return_logs=return_logs, progress=progress)
+            else:
+                # Legacy sigmoid mode: Convert to inv_depth as before
+                sup_output = self.supervised_loss(
+                    bounded_inv_depths, depth2inv(batch['depth']),
+                    return_logs=return_logs, progress=progress)
 
             try:
-                self._save_loss_inv_debug(bounded_inv_depths, depth2inv(batch['depth']))
+                # Debug visualization (convert to inv_depth for compatibility)
+                if depth_output_mode == 'direct':
+                    bounded_inv_for_viz = [depth2inv(d) for d in depth_outputs]
+                    self._save_loss_inv_debug(bounded_inv_for_viz, depth2inv(batch['depth']))
+                else:
+                    self._save_loss_inv_debug(bounded_inv_depths, depth2inv(batch['depth']))
             except Exception as e:
                 print("[LOSS_INV_VIZ][ERROR]", e)
 
             loss += self.supervised_loss_weight * sup_output['loss']
 
             if 'inv_depths_rgbd' in self_sup_output:
-                # Also convert RGBD outputs
-                sigmoid_rgbd = self_sup_output['inv_depths_rgbd']
-                bounded_inv_rgbd = [
-                    sigmoid_to_inv_depth(sig, self.min_depth, self.max_depth, use_log_space=self.use_log_space)
-                    for sig in sigmoid_rgbd
-                ]
-                sup_output2 = self.supervised_loss(
-                    bounded_inv_rgbd, depth2inv(batch['depth']),
-                    return_logs=return_logs, progress=progress)
+                # Also convert RGBD outputs based on mode
+                if depth_output_mode == 'direct':
+                    # Direct depth mode
+                    depth_rgbd = self_sup_output['inv_depths_rgbd']
+                    sup_output2 = self.supervised_loss(
+                        depth_rgbd, batch['depth'],  # Pass depth directly
+                        return_logs=return_logs, progress=progress)
+                else:
+                    # Legacy sigmoid mode
+                    from packnet_sfm.utils.post_process_depth import sigmoid_to_inv_depth
+                    sigmoid_rgbd = self_sup_output['inv_depths_rgbd']
+                    bounded_inv_rgbd = [
+                        sigmoid_to_inv_depth(sig, self.min_depth, self.max_depth, use_log_space=self.use_log_space)
+                        for sig in sigmoid_rgbd
+                    ]
+                    sup_output2 = self.supervised_loss(
+                        bounded_inv_rgbd, depth2inv(batch['depth']),
+                        return_logs=return_logs, progress=progress)
                 loss += self.weight_rgbd * self.supervised_loss_weight * sup_output2['loss']
                 if 'depth_loss' in self_sup_output:
                     loss += self_sup_output['depth_loss']

@@ -67,6 +67,8 @@ cfg.model.loss.near_field_threshold = 1.0      # Near-field distance threshold (
 cfg.model.loss.road_weight = 5.0               # Weight for road pixels
 cfg.model.loss.road_nearfield_weight = 10.0    # Weight for road + near-field pixels
 cfg.model.loss.nonroad_nearfield_weight = 3.0  # Weight for non-road near-field pixels
+# 🆕 Direct depth output mode (for INT8 quantization optimization)
+cfg.model.loss.input_mode = 'inv_depth'        # Input mode for loss: 'inv_depth' (legacy) or 'depth' (direct depth)
 ########################################################################################################################
 ### MODEL.DEPTH_NET
 ########################################################################################################################
@@ -81,6 +83,11 @@ cfg.model.depth_net.force_output_shape = () # 🆕 출력 해상도 강제. 예:
 cfg.model.depth_net.use_film = False        # Enable Depth-aware FiLM
 cfg.model.depth_net.film_scales = [0]       # Which scales to apply FiLM
 cfg.model.depth_net.use_enhanced_lidar = False  # Enable enhanced LiDAR processing
+
+# 🆕 Direct depth output mode (for INT8 quantization optimization)
+cfg.model.depth_net.depth_output_mode = 'sigmoid'  # Output mode: 'sigmoid' (Bounded Inverse, legacy) or 'direct' (Direct Linear Depth)
+cfg.model.depth_net.min_depth = 0.5         # Minimum depth for direct output mode
+cfg.model.depth_net.max_depth = 80.0        # Maximum depth for direct output mode
 
 # 🆕 ReZero 관련 설정 (ResNetSAN01_ReZero 전용)
 cfg.model.depth_net.use_encoder_rezero = False  # Enable ReZero in ResNet encoder blocks

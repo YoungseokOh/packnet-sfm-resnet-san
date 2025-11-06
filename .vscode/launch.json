@@ -93,13 +93,13 @@
         "console": "integratedTerminal",
         "cwd": "${workspaceFolder}",
         // Training
-        "args": ["configs/train_resnet_san_ncdb_640x384.yaml"],
+        "args": ["configs/train_resnet_san_ncdb_640x384_direct_depth.yaml"],
         // "args": ["configs/train_resnet_san_ncdb.yaml"],
         // Evaliation
         // "args": 
         //     [
         //         "--checkpoint",
-        //         "ResNet-SAN_0.5to100.ckpt",
+        //         "checkpoints/resnetsan_linear_05_15.ckpt",
         //         "--config", 
         //         "configs/train_resnet_san_ncdb_640x384.yaml"
         //     ],

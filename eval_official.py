@@ -1,4 +1,8 @@
-# Copyright 2020 Toyota Research Institute.  All rights reserved.
+#!/usr/bin/env python3
+"""
+Official evaluation script modified to support validation set evaluation
+Based on scripts/eval.py
+"""
 
 import argparse
 import torch
@@ -11,10 +15,12 @@ from packnet_sfm.utils.horovod import hvd_init
 
 
 def parse_args():
-    """Parse arguments for training script"""
-    parser = argparse.ArgumentParser(description='PackNet-SfM evaluation script')
-    parser.add_argument('--checkpoint', type=str, help='Checkpoint (.ckpt)')
+    """Parse arguments for evaluation script"""
+    parser = argparse.ArgumentParser(description='PackNet-SfM evaluation script (with val/test support)')
+    parser.add_argument('--checkpoint', type=str, required=True, help='Checkpoint (.ckpt)')
     parser.add_argument('--config', type=str, default=None, help='Configuration (.yaml)')
+    parser.add_argument('--split', type=str, default='test', choices=['val', 'test'],
+                       help='Dataset split to evaluate (val or test)')
     parser.add_argument('--half', action="store_true", help='Use half precision (fp16)')
     args = parser.parse_args()
     assert args.checkpoint.endswith('.ckpt'), \
@@ -24,9 +30,9 @@ def parse_args():
     return args
 
 
-def test(ckpt_file, cfg_file, half):
+def evaluate(ckpt_file, cfg_file, split, half):
     """
-    Monocular depth estimation test script.
+    Monocular depth estimation evaluation script.
 
     Parameters
     ----------
@@ -34,6 +40,8 @@ def test(ckpt_file, cfg_file, half):
         Checkpoint path for a pretrained model
     cfg_file : str
         Configuration file
+    split : str
+        Dataset split ('val' or 'test')
     half: bool
         use half precision (fp16)
     """
@@ -49,7 +57,6 @@ def test(ckpt_file, cfg_file, half):
     # Initialize monodepth model from checkpoint arguments
     model_wrapper = ModelWrapper(config)
     # Restore model state
-    # 🔧 strict=False: Minkowski 레이어는 inference에서 불필요 (training 전용)
     model_wrapper.load_state_dict(state_dict, strict=False)
 
     # change to half precision for evaluation if requested
@@ -58,10 +65,28 @@ def test(ckpt_file, cfg_file, half):
     # Create trainer with args.arch parameters
     trainer = HorovodTrainer(**config.arch)
 
-    # Test model
-    trainer.test(model_wrapper)
+    # Choose evaluation method based on split
+    if split == 'val':
+        print("\n" + "="*80)
+        print(f"📊 VALIDATION SET EVALUATION")
+        print("="*80)
+        
+        # Send module to GPU
+        model_wrapper = model_wrapper.to('cuda', dtype=trainer.dtype)
+        # Get validation dataloaders
+        val_dataloaders = model_wrapper.val_dataloader()
+        # Run validation
+        trainer.validate(val_dataloaders, model_wrapper)
+        
+    else:  # test
+        print("\n" + "="*80)
+        print(f"📊 TEST SET EVALUATION")
+        print("="*80)
+        
+        # Use standard test method
+        trainer.test(model_wrapper)
 
 
 if __name__ == '__main__':
     args = parse_args()
-    test(args.checkpoint, args.config, args.half)
+    evaluate(args.checkpoint, args.config, args.split, args.half)

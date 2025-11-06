@@ -27,22 +27,27 @@ class SSISilogLoss(LossBase):
         Weight for SSI component (default: 0.7)
     silog_weight : float
         Weight for Silog component (default: 0.3)
+    input_mode : str
+        Input format: 'inv_depth' (legacy) or 'depth' (direct depth output)
     """
     def __init__(self, alpha=0.85, silog_ratio=10, silog_ratio2=0.85, 
                  ssi_weight=0.7, silog_weight=0.3,
                 #  ssi_weight=1.0, silog_weight=0.0,
-                 min_depth: Optional[float] = None, max_depth: Optional[float] = None):
+                 min_depth: Optional[float] = None, max_depth: Optional[float] = None,
+                 input_mode: str = 'inv_depth'):
         super().__init__()
         self.alpha = alpha
         self.silog_ratio = silog_ratio
         self.silog_ratio2 = silog_ratio2
         self.ssi_weight = ssi_weight
         self.silog_weight = silog_weight
+        self.input_mode = input_mode  # 'inv_depth' or 'depth'
         # Optional clamp range sourced from YAML; if None, fall back to safe defaults
         self.min_depth = min_depth
         self.max_depth = max_depth
         
         print(f"🎯 SSI-Silog Loss initialized:")
+        print(f"   Input mode: {input_mode} ({'Direct Depth' if input_mode == 'depth' else 'Inverse Depth'})")
         print(f"   SSI weight: {ssi_weight}")
         print(f"   Silog weight: {silog_weight}")
         print(f"   Alpha: {alpha}")
@@ -247,14 +252,14 @@ class SSISilogLoss(LossBase):
 
     def forward(self, pred_inv_depth, gt_inv_depth, mask=None):
         """
-        Forward pass
+        Forward pass - supports both inv_depth and direct depth inputs
         
         Parameters
         ----------
         pred_inv_depth : torch.Tensor [B,1,H,W]
-            Predicted inverse depth (sigmoid output)
+            Predicted inverse depth (sigmoid output) OR direct depth (if input_mode='depth')
         gt_inv_depth : torch.Tensor [B,1,H,W]
-            Ground truth inverse depth (converted from depth)
+            Ground truth inverse depth (converted from depth) OR direct depth (if input_mode='depth')
         mask : torch.Tensor [B,1,H,W], optional
             Valid pixel mask
             
@@ -263,13 +268,35 @@ class SSISilogLoss(LossBase):
         loss : torch.Tensor
             Combined SSI + Silog loss
         """
-        # ✅ SSI Loss: Compute in inverse depth domain (better for far objects)
-        ssi_loss = self.compute_ssi_loss_inv(pred_inv_depth, gt_inv_depth, mask)
+        if self.input_mode == 'depth':
+            # ✅ Direct depth input mode (NEW)
+            # Input already in depth space
+            pred_depth = pred_inv_depth
+            gt_depth = gt_inv_depth
+            
+            # 🔧 CRITICAL FIX: Compute SSI in depth space (not inv_depth)
+            # SSI is scale-shift invariant, so it works in any monotonic space
+            # Computing in depth space avoids unstable gradients from depth→inv_depth conversion
+            if mask is None:
+                mask = (gt_depth > 0)
+            ssi_loss = self.compute_ssi_loss(pred_depth, gt_depth, mask)
+            
+        else:
+            # ✅ Inverse depth input mode (LEGACY)
+            # Input in inverse depth space
+            pred_inv_depth_val = pred_inv_depth
+            gt_inv_depth_val = gt_inv_depth
+            
+            # SSI in inverse depth space (PackNet original)
+            if mask is None:
+                mask = (gt_inv_depth_val > 0)
+            ssi_loss = self.compute_ssi_loss_inv(pred_inv_depth_val, gt_inv_depth_val, mask)
+            
+            # Convert to depth for Silog computation
+            pred_depth = inv2depth(pred_inv_depth_val)
+            gt_depth = inv2depth(gt_inv_depth_val)
         
-        # ✅ Silog Loss: Convert to depth domain (required for log computation)
-        pred_depth = inv2depth(pred_inv_depth)
-        gt_depth = inv2depth(gt_inv_depth)
-        
+        # ✅ Silog Loss: Always compute in depth domain (required for log)
         if mask is None:
             mask = (gt_depth > 0)
         
@@ -296,5 +323,6 @@ class SSISilogLoss(LossBase):
         self.add_metric('silog_component', silog_loss)
         self.add_metric('ssi_weight_used', self.ssi_weight)
         self.add_metric('silog_weight_used', self.silog_weight)
+        # Note: input_mode is logged at initialization, not as a metric
         
         return total_loss

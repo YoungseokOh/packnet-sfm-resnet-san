@@ -67,9 +67,12 @@ def sigmoid_to_inv_depth(sigmoid_output, min_depth=0.05, max_depth=80.0, use_log
 
 def sigmoid_to_depth_linear(sigmoid_output, min_depth=0.05, max_depth=80.0):
     """
-    Linear space transformation: sigmoid → depth
+    Bounded Inverse Depth transformation: sigmoid → depth
     
-    This is the original transformation method used in PackNet-SFM.
+    ⚠️  WARNING: Despite the name 'linear', this function uses BOUNDED INVERSE transformation!
+    This is the ORIGINAL method used in PackNet-SFM training.
+    
+    For true linear transformation, use sigmoid_to_depth_direct() instead.
     
     Args:
         sigmoid_output: torch.Tensor [B,1,H,W] or [H,W], values in [0, 1]
@@ -79,25 +82,24 @@ def sigmoid_to_depth_linear(sigmoid_output, min_depth=0.05, max_depth=80.0):
     Returns:
         depth: torch.Tensor, same shape, values in [min_depth, max_depth]
     
-    Mathematical Formula:
+    Mathematical Formula (Bounded Inverse):
         inv_depth = min_inv + (max_inv - min_inv) × sigmoid
         depth = 1 / inv_depth
         
         where:
-            min_inv = 1 / max_depth
-            max_inv = 1 / min_depth
+            min_inv = 1 / max_depth  (sigmoid=0 → far)
+            max_inv = 1 / min_depth  (sigmoid=1 → near)
     
-    INT8 Quantization Error (0.05~80m range):
+    INT8 Quantization Error (0.5~15m range):
         - Non-uniform error distribution
-        - Near range (0.05m): ~0.4% error
-        - Mid range (1m): ~39% error  ❌ CRITICAL
-        - Far range (10m): ~392% error ❌ UNUSABLE
+        - Near range (0.5m): ~0.9mm error ✅
+        - Far range (15m): ~853mm error ❌ CATASTROPHIC
     
     Example:
         >>> sigmoid = torch.tensor([0.0, 0.5, 1.0]).view(1, 1, 1, 3)
-        >>> depth = sigmoid_to_depth_linear(sigmoid, 0.05, 80.0)
+        >>> depth = sigmoid_to_depth_linear(sigmoid, 0.5, 15.0)
         >>> print(depth)
-        tensor([[[[80.0000, 0.0999, 0.0500]]]])
+        tensor([[[[15.0000, 0.9677, 0.5000]]]])  # Note: sigmoid=0.5 → 0.97m (NOT 7.75m!)
     """
     min_inv = 1.0 / max(max_depth, 1e-6)
     max_inv = 1.0 / max(min_depth, 1e-6)
@@ -105,6 +107,42 @@ def sigmoid_to_depth_linear(sigmoid_output, min_depth=0.05, max_depth=80.0):
     inv_depth = min_inv + (max_inv - min_inv) * sigmoid_output
     depth = 1.0 / (inv_depth + 1e-8)
     
+    return depth
+
+
+def sigmoid_to_depth_direct(sigmoid_output, min_depth=0.05, max_depth=80.0):
+    """
+    TRUE Linear transformation: sigmoid → depth
+    
+    This is the DIRECT LINEAR mapping for INT8 quantization optimization.
+    
+    Args:
+        sigmoid_output: torch.Tensor [B,1,H,W] or [H,W], values in [0, 1]
+        min_depth: minimum depth (m), default 0.05
+        max_depth: maximum depth (m), default 80.0
+    
+    Returns:
+        depth: torch.Tensor, same shape, values in [min_depth, max_depth]
+    
+    Mathematical Formula (Direct Linear):
+        depth = min_depth + (max_depth - min_depth) × sigmoid
+        
+        where:
+            sigmoid=0 → min_depth (near)
+            sigmoid=1 → max_depth (far)
+    
+    INT8 Quantization Error (0.5~15m range):
+        - UNIFORM error distribution ✅
+        - All depths: ±28.4mm (constant)
+        - 30x better than Bounded Inverse at far-field!
+    
+    Example:
+        >>> sigmoid = torch.tensor([0.0, 0.5, 1.0]).view(1, 1, 1, 3)
+        >>> depth = sigmoid_to_depth_direct(sigmoid, 0.5, 15.0)
+        >>> print(depth)
+        tensor([[[[0.5000, 7.7500, 15.0000]]]])  # Linear: sigmoid=0.5 → 7.75m ✅
+    """
+    depth = min_depth + (max_depth - min_depth) * sigmoid_output
     return depth
 
 

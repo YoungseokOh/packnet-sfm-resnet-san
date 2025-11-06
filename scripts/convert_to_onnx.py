@@ -85,8 +85,8 @@ def load_model_simple(checkpoint_path):
     """Load model using simple approach - similar to your method"""
     print(f"Loading model from: {checkpoint_path}")
     
-    # Load checkpoint (weights_only=False for compatibility with YACS config)
-    checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+    # Load checkpoint
+    checkpoint = torch.load(checkpoint_path, map_location='cpu')
     config = checkpoint['config']
     state_dict = checkpoint['state_dict']
     
@@ -96,12 +96,25 @@ def load_model_simple(checkpoint_path):
     # Import and create the model
     from packnet_sfm.networks.depth.ResNetSAN01 import ResNetSAN01
     
+    # 🆕 Get depth output mode from config (if available)
+    depth_output_mode = config.model.depth_net.get('depth_output_mode', 'sigmoid')
+    min_depth = config.model.params.get('min_depth', 0.5)
+    max_depth = config.model.params.get('max_depth', 80.0)
+    
+    print(f"📊 Model Configuration:")
+    print(f"   depth_output_mode: {depth_output_mode}")
+    print(f"   min_depth: {min_depth}m")
+    print(f"   max_depth: {max_depth}m")
+    
     # Create depth network
     depth_net = ResNetSAN01(
         dropout=config.model.depth_net.get('dropout', 0.5),
         version=config.model.depth_net.get('version', '1A'),
         use_enhanced_lidar=False,  # 🔧 ONNX 변환 시 MinkowskiEngine 비활성화
-        use_film=False  # 🔧 ONNX 변환 시 FiLM 비활성화 (MinkowskiEncoder 불필요)
+        use_film=False,  # 🔧 ONNX 변환 시 FiLM 비활성화 (MinkowskiEncoder 불필요)
+        depth_output_mode=depth_output_mode,  # 🆕 Direct depth mode support
+        min_depth=min_depth,  # 🆕 Depth range
+        max_depth=max_depth   # 🆕 Depth range
     )
     
     # Extract and load state dict - similar to your OrderedDict approach

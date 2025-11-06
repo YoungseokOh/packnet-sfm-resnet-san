@@ -616,9 +616,9 @@ class ModelWrapper(torch.nn.Module):
                     if max_val > 500:
                         print(f"  ⚠️ WARNING: Max > 500, seems like 256x scaled!")
         
-        # ★ STEP 2: Model forward → sigmoid outputs [0, 1]
-        sigmoid_outputs = self.model(batch)['inv_depths']  # list, first scale: (B,1,H,W)
-        sigmoid0 = sigmoid_outputs[0]  # (B,1,H,W) with values in [0, 1]
+        # ★ STEP 2: Model forward → outputs (sigmoid or direct depth)
+        model_outputs = self.model(batch)['inv_depths']  # list, first scale: (B,1,H,W)
+        output0 = model_outputs[0]  # (B,1,H,W)
         
         # ★ STEP 3: Get depth range from config
         min_depth = float(self.config.model.params.min_depth)
@@ -627,23 +627,48 @@ class ModelWrapper(torch.nn.Module):
         # ★ STEP 3.5: Get log space setting from model
         use_log_space = getattr(self.model, 'use_log_space', False)
         
-        # ★ STEP 4: Convert sigmoid to bounded inverse depth (CRITICAL!)
-        # This must match the training-time conversion!
-        from packnet_sfm.utils.post_process_depth import sigmoid_to_inv_depth
-        inv_depth = sigmoid_to_inv_depth(sigmoid0, min_depth, max_depth, use_log_space=use_log_space)
+        # ★ STEP 4: Check if model outputs direct depth or sigmoid
+        # If depth_net has depth_output_mode='direct', output is already depth!
+        depth_net = getattr(self.model, 'depth_net', None)
+        depth_output_mode = getattr(depth_net, 'depth_output_mode', 'sigmoid')
         
-        # ★ STEP 5: Convert inverse depth to depth (same as original code)
-        from packnet_sfm.utils.depth import inv2depth
-        depth_pred = inv2depth(inv_depth)
-        
-        # ★ STEP 6: Also compute with both Linear and Log transformations for comparison
-        # Linear: matches linear training
-        # Log: matches log training
-        depth_linear = sigmoid_to_depth_linear(sigmoid0, min_depth, max_depth)
-        depth_log = sigmoid_to_depth_log(sigmoid0, min_depth, max_depth)
+        if depth_output_mode == 'direct':
+            # 🆕 Direct Depth Mode: Output is already depth, no conversion needed!
+            depth_pred = output0
+            
+            # For comparison, also compute inverse depth
+            from packnet_sfm.utils.depth import depth2inv, inv2depth
+            inv_depth = depth2inv(depth_pred)
+            
+            # Linear and Log are same as direct for this mode
+            depth_linear = depth_pred
+            depth_log = depth_pred
+            
+            if not hasattr(self, '_direct_eval_logged'):
+                print(f"\n[evaluate_depth] Direct Depth Mode")
+                print(f"   Model outputs depth directly (no conversion)")
+                print(f"   Range: [{min_depth}, {max_depth}]m")
+                self._direct_eval_logged = True
+            
+        else:
+            # ★ Legacy Sigmoid Mode: Convert sigmoid to bounded inverse depth (CRITICAL!)
+            # This must match the training-time conversion!
+            from packnet_sfm.utils.post_process_depth import sigmoid_to_inv_depth
+            sigmoid0 = output0  # values in [0, 1]
+            inv_depth = sigmoid_to_inv_depth(sigmoid0, min_depth, max_depth, use_log_space=use_log_space)
+            
+            # ★ Convert inverse depth to depth (same as original code)
+            from packnet_sfm.utils.depth import inv2depth
+            depth_pred = inv2depth(inv_depth)
+            
+            # ★ Also compute with both Linear and Log transformations for comparison
+            # Linear: matches linear training
+            # Log: matches log training
+            depth_linear = sigmoid_to_depth_linear(sigmoid0, min_depth, max_depth)
+            depth_log = sigmoid_to_depth_log(sigmoid0, min_depth, max_depth)
         
         # ★ STEP 5: Normalize GT depth to (B,1,H,W) on correct device
-        device = sigmoid0.device
+        device = output0.device  # Use output0 instead of sigmoid0 (works for both modes)
         def _to_b1hw(x):
             if x is None:
                 return None
@@ -891,6 +916,17 @@ def setup_depth_net(config, prepared, **kwargs):
                 extra_depth_args['min_depth'] = float(config.params.min_depth)
             if hasattr(config.params, 'max_depth'):
                 extra_depth_args['max_depth'] = float(config.params.max_depth)
+    except Exception:
+        pass
+    
+    # 🆕 depth_output_mode 전달 (config.depth_net에서)
+    try:
+        if hasattr(config, 'depth_output_mode'):
+            extra_depth_args['depth_output_mode'] = config.depth_output_mode
+        if hasattr(config, 'min_depth'):
+            extra_depth_args['min_depth'] = float(config.min_depth)
+        if hasattr(config, 'max_depth'):
+            extra_depth_args['max_depth'] = float(config.max_depth)
     except Exception:
         pass
 
