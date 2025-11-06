@@ -77,53 +77,54 @@ scripts/
 
 ### 실험/디버깅용 임시 스크립트 (목적 달성/중복)
 ```
+# ✅ 삭제 완료 (2025-11-06)
 # Bounded Inverse 관련 (Direct Depth로 대체됨)
-extract_raw_sigmoid.py               # 🔸 Sigmoid 값 추출 (실험용, 더 이상 필요 없음)
-compare_sigmoid_outputs.py           # 🔸 PyTorch vs NPU sigmoid 비교 (분석 완료)
-verify_sigmoid_outputs.py            # 🔸 Sigmoid 검증 (분석 완료)
+extract_raw_sigmoid.py               # ✅ 삭제됨
+compare_sigmoid_outputs.py           # ✅ 삭제됨
+verify_sigmoid_outputs.py            # ✅ 삭제됨
 
 # 변환 방법 비교 (결론 도출 완료)
-evaluate_npu_transformation_comparison.py  # 🔸 Linear vs Bounded Inverse 비교 (결론: Direct Depth 선택)
-analyze_transformation_methods.py          # 🔸 변환 방법 분석 (설명 완료)
-explain_linear_relative_error.py           # 🔸 Linear 상대 오차 설명 (문서화 완료)
-analyze_int8_resolution.py                 # 🔸 INT8 해상도 분석 (이론 검증 완료)
+evaluate_npu_transformation_comparison.py  # ✅ 삭제됨
+analyze_transformation_methods.py          # ✅ 삭제됨
+explain_linear_relative_error.py           # ✅ 삭제됨
+analyze_int8_resolution.py                 # ✅ 삭제됨
 
 # 디버깅/테스트 스크립트 (목적 달성)
-debug_direct_depth_output.py         # 🔸 모델 출력 디버깅 (검증 완료)
-test_direct_depth_setup.py           # 🔸 Direct Depth 설정 테스트 (검증 완료)
-verify_direct_depth_onnx.py          # 🔸 ONNX 모델 검증 (검증 완료)
+debug_direct_depth_output.py         # ✅ 삭제됨
+test_direct_depth_setup.py           # ✅ 삭제됨
+verify_direct_depth_onnx.py          # ✅ 삭제됨
 
 # 중복된 평가 스크립트 (최종 버전은 _official.py)
-evaluate_npu_direct_depth.py         # 🔸 NPU 평가 (evaluate_npu_direct_depth_official.py로 대체)
-evaluate_npu_official.py             # 🔸 Bounded Inverse NPU 평가 (더 이상 사용 안함)
-eval_precomputed_depths.py           # 🔸 복잡한 버전 (eval_precomputed_simple.py로 대체)
-eval_all_models.py                   # 🔸 통합 평가 (개별 평가로 대체)
+evaluate_npu_direct_depth.py         # ✅ 삭제됨
+evaluate_npu_official.py             # ✅ 삭제됨
+eval_precomputed_depths.py           # ✅ 삭제됨
+eval_all_models.py                   # ✅ 삭제됨
 
 # 중복된 Inference 스크립트
-infer_pytorch_direct_depth.py        # 🔸 초기 버전 (generate_pytorch_predictions.py로 대체)
-infer_pytorch_fp32_direct_depth.py   # 🔸 중복 (generate_pytorch_predictions.py 사용)
-infer_onnx_fp32_direct_depth.py      # 🔸 ONNX FP32 inference (필요 시 재생성 가능)
+infer_pytorch_direct_depth.py        # ✅ 삭제됨
+infer_pytorch_fp32_direct_depth.py   # ✅ 삭제됨
+infer_onnx_fp32_direct_depth.py      # ✅ 삭제됨
 
 # 중복된 시각화 스크립트 (최종: visualize_fp32_vs_int8_comparison.py)
-visualize_direct_depth_best_worst.py      # 🔸 구 버전 (새 레이아웃으로 대체)
-visualize_onnx_fp32_vs_int8.py            # 🔸 ONNX 비교 (NPU 결과 사용)
-visualize_onnx_fp32_vs_npu_int8.py        # 🔸 ONNX+NPU 비교 (중복)
-visualize_pytorch_vs_onnx_vs_npu.py       # 🔸 3-way 비교 (복잡, 필요시 재생성)
+visualize_direct_depth_best_worst.py      # ✅ 삭제됨
+visualize_onnx_fp32_vs_int8.py            # ✅ 삭제됨
+visualize_onnx_fp32_vs_npu_int8.py        # ✅ 삭제됨
+visualize_pytorch_vs_onnx_vs_npu.py       # ✅ 삭제됨
 
 # 중복된 비교 테이블 스크립트
-create_comparison_table.py           # 🔸 Bounded Inverse 비교 (더 이상 사용 안함)
-create_fp32_vs_int8_comparison.py    # 🔸 중복 (create_fp32_vs_int8_table.py 사용)
+create_comparison_table.py           # ✅ 삭제됨
+create_fp32_vs_int8_comparison.py    # ✅ 삭제됨
 
 # 기타 분석 스크립트 (일회성 분석 완료)
-analyze_direct_depth_int8.py         # 🔸 INT8 분석 (현재 열려있지만 분석 완료)
-analyze_gt_depth_range.py            # 🔸 GT depth 범위 분석 (확인 완료)
-analyze_loss_scale.py                # 🔸 Loss scale 분석 (실험 완료)
-collect_gt_depths.py                 # 🔸 GT depth 수집 (일회성 작업)
-compare_npu_gpu_gt.py                # 🔸 NPU/GPU/GT 3-way 비교 (결론 도출)
-validate_checkpoint_metrics.py       # 🔸 체크포인트 검증 (epoch 29 검증 완료)
+analyze_direct_depth_int8.py         # ✅ 삭제됨
+analyze_gt_depth_range.py            # ✅ 삭제됨
+analyze_loss_scale.py                # ✅ 삭제됨
+collect_gt_depths.py                 # ✅ 삭제됨
+compare_npu_gpu_gt.py                # ✅ 삭제됨
+validate_checkpoint_metrics.py       # ✅ 삭제됨
 
 # ONNX INT8 (ONNX Runtime 한계로 NPU 사용)
-quantize_and_infer_onnx_int8.py      # 🔸 ONNX INT8 양자화 (ConvInteger 미지원으로 사용 불가)
+quantize_and_infer_onnx_int8.py      # ✅ 삭제됨
 ```
 
 ### 실험용 이미지/로그
@@ -167,7 +168,7 @@ scripts/
 
 ### 문서/로그 (정리 가능)
 ```
-todo/                                # 🔸 TODO 목록 (오래된 작업 목록)
+todo/                                # ✅ 삭제됨 (오래된 작업 목록)
 daily_work_log/                      # 🔸 일일 작업 로그 (백업 후 삭제 가능)
 docs/                                # 🔸 문서 (필요시 확인 후 정리)
 docs_md/                             # 🔸 마크다운 문서 (필요시 확인 후 정리)
@@ -192,12 +193,12 @@ scripts/EVALUATE_USAGE.md            # 🔸 평가 사용법 (오래됨)
 - **필수 설정**: `configs/train_resnet_san_ncdb_640x384_direct_depth.yaml`, `configs/eval_ncdb_640_test.yaml`
 
 ### 삭제 가능 (CAN DELETE)
-- **실험 완료 스크립트**: ~30개 (분석/디버깅/중복 스크립트)
+- **실험 완료 스크립트**: ~30개 ✅ **삭제됨** (분석/디버깅/중복 스크립트)
 - **사용 안하는 configs**: ~15개 (DDAD, KITTI, YOLOv8, PackNet 등)
-- **사용 안하는 scripts**: ~30개 (ref_*, analyze_*, compare_* 등)
-- **오래된 문서/로그**: todo/, daily_work_log/
+- **사용 안하는 scripts**: ~20개 (ref_*, analyze_*, compare_* 등)
+- **오래된 문서/로그**: todo/ ✅ **삭제됨**, daily_work_log/
 
-**삭제 가능 파일 수**: 약 **75-80개** (전체의 약 25-30%)
+**삭제 가능 파일 수**: 약 **35-40개** (전체의 약 10-15%)
 
 ---
 
