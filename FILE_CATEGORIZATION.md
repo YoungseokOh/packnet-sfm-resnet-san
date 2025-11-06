@@ -178,7 +178,7 @@ scripts/
 ```
 todo/                                # ✅ 삭제됨 (오래된 작업 목록)
 daily_work_log/                      # 🔸 일일 작업 로그 (백업 후 삭제 가능)
-docs/                                # 🔸 문서 (필요시 확인 후 정리)
+docs/                                # ✅ 삭제됨 (Sphinx HTML 문서, 14MB 절약)
 docs_md/                             # 🔸 마크다운 문서 (필요시 확인 후 정리)
 scripts/EVALUATE_USAGE.md            # 🔸 평가 사용법 (오래됨)
 ```
