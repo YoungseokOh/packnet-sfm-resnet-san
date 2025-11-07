@@ -82,6 +82,9 @@ cfg.model.depth_net.use_film = False        # Enable Depth-aware FiLM
 cfg.model.depth_net.film_scales = [0]       # Which scales to apply FiLM
 cfg.model.depth_net.use_enhanced_lidar = False  # Enable enhanced LiDAR processing
 
+# 🆕 ST2 Dual-Head 설정 (INT8 quantization 지원)
+cfg.model.depth_net.use_dual_head = False   # Enable Dual-Head architecture (integer + fractional)
+
 # 🆕 ReZero 관련 설정 (ResNetSAN01_ReZero 전용)
 cfg.model.depth_net.use_encoder_rezero = False  # Enable ReZero in ResNet encoder blocks
 
