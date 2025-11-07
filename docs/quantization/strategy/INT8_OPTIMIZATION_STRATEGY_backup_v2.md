@@ -1,32 +1,104 @@
 # INT8 양자화 성능 최적화 전략
 
 **목표**: NPU INT8 성능 향상 (현재 abs_rel 0.1133 → 목표 0.05 이하)  
-**제약사항**: Post-Training Quantization (PTQ) only, min/max calibration  
-**날짜**: 2025-11-06
+**날짜**: 2025-11-06  
+**문서 버전**: 2.0 (Per-channel constraint 반영)
 
 ---
 
-## 📊 현재 상태
+## 📑 목차 (Table of Contents)
+
+### 1. [현재 상태 분석](#-현재-상태-분석)
+   - 성능 지표
+   - 문제 분석
+   - NPU 제약사항
+
+### 2. [최적화 전략](#-최적화-전략-overview)
+   - 전략 1: Integer-Fractional Separation (정수부/소수부 분리)
+   - 전략 2: Knowledge Distillation (Teacher-Student)
+   - 전략 3: Mixed Precision (조건부)
+   - 전략 4: Advanced PTQ Calibration
+   - 전략 5: Quantization-Aware Fine-tuning (QAF)
+
+### 3. [NPU 하드웨어 최적화](#-npu-하드웨어-최적화)
+   - Memory Hierarchy 최적화
+   - Compute Unit 활용
+   - Data Flow 최적화
+   - Power Efficiency
+
+### 4. [구현 로드맵](#-종합-전략-및-우선순위)
+   - Phase 1: Advanced PTQ Calibration
+   - Phase 2: Dual-Head Architecture
+   - Phase 3: Knowledge Distillation
+   - Phase 4: QAF (대안 경로)
+   - Phase 5: Mixed Precision (조건부)
+
+### 5. [실험 체크리스트](#-실험-체크리스트)
+
+### 6. [핵심 권장사항](#-핵심-권장사항)
+
+---
+
+## 📊 현재 상태 분석
+
+### NPU 제약사항 (Confirmed)
+
+| 항목 | 지원 여부 | 영향도 | 비고 |
+|-----|---------|--------|------|
+| **PTQ Only** | ✅ 확정 | High | QAT 불가, Fine-tuning만 가능 |
+| **Min/Max Calibration** | ✅ 확정 | Medium | Percentile 방식으로 우회 가능 |
+| **Dual Output** | ✅ 지원 | Critical | Dual-Head 전략 가능! |
+| **Per-channel Quantization** | ❌ 미지원 | High | 9% 성능 손실, 대체 전략 필요 |
+| **Asymmetric Quantization** | ⚠️ 미확인 | Critical | ReLU 후 activation 정밀도에 중요 |
+| **FP16 Mixed Precision** | ⚠️ 미확인 | Medium | Bonus 5-10% 개선 가능 |
 
 ### 성능 지표
-```
-FP32 (PyTorch):  abs_rel = 0.0304
-INT8 (NPU PTQ):  abs_rel = 0.1133
-Degradation:     +272% (3.7배 악화)
-```
+
+| Metric | FP32 (PyTorch) | INT8 (NPU PTQ) | Degradation |
+|--------|----------------|----------------|-------------|
+| **abs_rel** | 0.0304 | 0.1133 | +272% (3.7배) |
+| **RMSE (이론)** | - | ±28mm | - |
+| **RMSE (실제)** | - | ±351mm | 12.5배 악화 |
 
 ### 문제 분석
-- **Output quantization**: ±28mm (이론적)
-- **실제 RMSE 증가**: 351mm (이론의 12.5배!)
-- **주요 원인**: Multi-layer feature map quantization 누적 효과
+
+**Root Cause**: Multi-layer feature map quantization 누적 효과
+
+```
+Input (INT8) → Encoder Layer 1 (±2mm error)
+            → Encoder Layer 2 (±4mm error, 누적)
+            → Encoder Layer 3 (±8mm error, 누적)
+            → Encoder Layer 4 (±16mm error, 누적)
+            → Decoder (±32mm error, 누적)
+            → Output (±351mm error!)
+```
+
+**Critical Insight**: 
+- 단순 output quantization: ±28mm
+- 실제 누적 error: ±351mm (12.5배!)
+- **Layer-wise optimization 필수**
 
 ---
 
-## 🎯 최적화 전략 (3가지 접근)
+## 🎯 최적화 전략 Overview
+
+5가지 전략을 조합하여 단계적으로 성능 개선:
+
+| 전략 | 타입 | 예상 개선 | 시간 | 리스크 |
+|-----|------|----------|------|--------|
+| **#1 Integer-Fractional Separation** | Architecture | ±28mm → ±2mm | 2주 | 중간 |
+| **#2 Knowledge Distillation** | Training | 35% | 2주 | 낮음 |
+| **#3 Mixed Precision** | Conditional | 10% | 1주 | 높음 |
+| **#4 Advanced PTQ Calibration** | PTQ | 25% | 1일 | 낮음 |
+| **#5 QAF** | Fine-tuning | 24% | 3일 | 중간 |
 
 ---
 
 ## 전략 1: Integer-Fractional Separation (정수부/소수부 분리)
+
+**Status**: ✅ NPU Dual-Output 지원 확인  
+**Priority**: ⭐⭐⭐ High (Per-channel 불가로 중요성 증가)  
+**Expected Impact**: abs_rel 0.085 → 0.055 (35% improvement)
 
 ### 🔍 핵심 아이디어
 
@@ -122,34 +194,30 @@ class DepthDecoderWithSeparation(nn.Module):
 ### ✅ 장점
 1. **정밀도 향상**: ±28mm → ±2mm (14배 개선)
 2. **Uniform error**: 모든 깊이 범위에서 동일
-3. **PTQ 호환**: Post-processing만으로 적용 가능
+3. **PTQ 호환**: Dual-head 재학습 후 PTQ 적용 가능
+4. **Per-channel 독립적**: Per-channel 없어도 효과 유지 ⭐
 
 ### ❌ 단점
-1. ~~**NPU 제약**: Dual output 지원 여부 확인 필요~~ ✅ **확인됨: Dual output 지원!**
-2. **재학습 필요**: Dual-head는 처음부터 재학습
-3. **복잡도 증가**: Inference pipeline 수정 필요
+1. **재학습 필요**: Dual-head는 처음부터 재학습
+2. **복잡도 증가**: Inference pipeline 수정 필요
+3. **NPU 검증**: Dual-output runtime 안정성 확인 필요
 
-### ✅ NPU 지원 확인 상태
-- **Dual output 지원**: ✅ 가능 확인
-- **Per-channel quantization**: ❌ **미지원 확인**
-- **Asymmetric quantization**: 확인 필요
-- **권장 구현**: Dual-head architecture 적극 추천
-- **우선순위 상향**: Phase 1 → Phase 2로 조정
+### 🎯 구현 우선순위
 
-### 🎯 추천 구현 순서
-1. **Phase 1**: ~~Option B (Post-processing) - 즉시 테스트 가능~~
-2. **Phase 2**: ~~NPU dual-output 검증~~ ✅ **확인 완료**
-3. **Phase 3**: **Option A (Dual-head) - 재학습 권장** ⭐ **우선순위 상향!**
+**Recommended**: Option A (Dual-head Architecture) ⭐⭐⭐
 
-### 💡 Dual Output 지원 확인에 따른 권장사항
-- **즉시 Dual-head 재학습 시작 가능**
-- **예상 최대 효과**: ±28mm → ±2mm (14배 개선)
-- **NPU 제약 없음**: Integer + Fractional 동시 출력 가능
-- **구현 복잡도**: 중간 (재학습 필요하지만 구조는 단순)
+**Rationale**:
+- NPU dual-output 지원 확인 완료
+- Per-channel 없어도 효과 유지 (구조적 개선)
+- 최고 성능 달성 가능 (abs_rel 0.055)
 
 ---
 
 ## 전략 2: Knowledge Distillation (Teacher-Student)
+
+**Status**: ⚠️ 준비 단계  
+**Priority**: ⭐⭐ Medium-High (Final polish용)  
+**Expected Impact**: abs_rel 0.055 → 0.04 (27% improvement)
 
 ### 🔍 핵심 아이디어
 
@@ -238,39 +306,92 @@ def feature_distillation_loss(student_feat, teacher_feat):
 1. **Feature-level guidance**: 단순 output matching보다 효과적
 2. **Quantization 대응**: INT8 특성에 맞게 학습
 3. **검증된 방법**: CV 분야에서 널리 사용
+4. **Per-channel 독립적**: Per-channel 없어도 distillation 효과 유지
 
 ### ❌ 단점
 1. **재학습 필수**: FP32 Teacher 필요
 2. **메모리 2배**: Teacher + Student 동시 로드
 3. **학습 시간 증가**: ~1.5-2배
 
-### 🎯 추천 구현 순서
+### 🎯 구현 우선순위
 1. **Phase 1**: Output distillation (L_output만)
 2. **Phase 2**: Feature distillation 추가
 3. **Phase 3**: Attention/Hint distillation
 
-### 📊 예상 성능 개선
-```
-Baseline PTQ:        abs_rel = 0.1133
-+ Output distill:    abs_rel = 0.08 (30% 개선)
-+ Feature distill:   abs_rel = 0.06 (47% 개선)
-+ Attention distill: abs_rel = 0.04 (65% 개선)
-```
-
 ---
 
-## 전략 4: Advanced PTQ Calibration (NPU 전문가 관점)
+## 전략 3: Mixed Precision (조건부)
+
+**Status**: ⚠️ NPU FP16 지원 확인 필요  
+**Priority**: ⭐ Low-Medium (Bonus 전략)  
+**Expected Impact**: +5-10% improvement (if supported)
 
 ### 🔍 핵심 아이디어
 
-**Calibration은 PTQ의 생명선!** Min/max만으로는 부족합니다.
+**Critical layers는 FP16**, Non-critical layers는 INT8
+
+```
+Input (INT8)
+  ↓
+Encoder Layers 1-3: INT8 (빠름, 정확도 덜 중요)
+  ↓
+Encoder Layer 4: FP16 (중요한 high-level features)
+  ↓
+Decoder: FP16 (정밀도 중요)
+  ↓
+Final Conv: FP16 (depth output, 최고 정밀도 필요)
+  ↓
+Output (FP32)
+```
+
+### 📐 Layer-wise Sensitivity Analysis
+
+```python
+def analyze_layer_sensitivity(model, val_loader):
+    """각 layer를 INT8로 변환했을 때 성능 저하 측정"""
+    sensitivities = {}
+    
+    for layer_name in model.layers:
+        quantized_model = quantize_single_layer(model, layer_name)
+        metrics = evaluate(quantized_model, val_loader)
+        sensitivity = metrics['abs_rel'] - baseline_abs_rel
+        sensitivities[layer_name] = sensitivity
+    
+    return sensitivities
+```
+
+### ✅ 장점
+1. **정확도-속도 균형**: FP32와 INT8의 중간
+2. **선택적 최적화**: Critical layers만 FP16
+3. **메모리 절감**: Full FP16보다 효율적 (~18-22MB)
+
+### ❌ 단점
+1. **NPU 의존성**: FP16/Mixed precision 지원 필요
+2. **복잡한 최적화**: Layer sensitivity 분석 필요
+3. **검증 필요**: NPU에서 실제 동작 확인 필요
+
+---
+
+## 전략 4: Advanced PTQ Calibration
+
+**Status**: ✅ 즉시 적용 가능  
+**Priority**: ⭐⭐⭐ Critical (First step!)  
+**Expected Impact**: abs_rel 0.1133 → 0.085 (25% improvement)
+
+### � 핵심 아이디어
+
+**Calibration은 PTQ의 생명선!** Per-channel 불가 상황에서 더욱 중요!
 
 ```
 Poor Calibration → 30-50% 성능 저하
 Optimal Calibration → 5-10% 성능 저하
 ```
 
-### 📐 Calibration 전략
+**Per-channel 불가 대응 전략**:
+1. **Percentile clipping 강화**: 99.5% (더 공격적)
+2. **Weight normalization**: Channel 간 scale 차이 최소화
+3. **Layer-wise optimization**: 각 layer별 최적 range
+4. **Calibration dataset 확대**: 200 samples (안정성 향상)
 
 #### 1. Percentile-based Range Selection
 ```python
@@ -510,23 +631,24 @@ Combined:                    abs_rel = 0.07-0.075 (30-35% 개선!)
 
 ## 전략 5: Quantization-Aware Fine-tuning (QAF)
 
+**Status**: ⚠️ 준비 단계  
+**Priority**: ⭐⭐ Medium (빠른 대안)  
+**Expected Impact**: abs_rel 0.085 → 0.065 (24% improvement)
+
 ### 🔍 핵심 아이디어
 
 **PTQ의 한계를 극복**: Fine-tuning으로 quantization error 보상
-
-```
-PTQ (Post-Training):         abs_rel = 0.1133
-QAT (from scratch):          abs_rel = 0.05   (재학습 4주)
-QAF (Fine-tuning):           abs_rel = 0.06   (Fine-tune 3일!)
-```
-
-### 📐 QAF vs QAT
 
 | Method | Time | Accuracy | Flexibility |
 |--------|------|----------|-------------|
 | **PTQ** | 1 hour | 0.1133 | ✅ Fast |
 | **QAF** | 3 days | 0.06 | ⭐ Balanced |
 | **QAT** | 4 weeks | 0.05 | ❌ Slow |
+
+**Per-channel 불가 시 QAF의 중요성 증가**:
+- PTQ 한계를 학습으로 보완
+- Per-channel 대신 Fine-tuning으로 정밀도 회복
+- 빠르고 효과적 (3일)
 
 ### 🏗️ 구현 방안
 
