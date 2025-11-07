@@ -29,6 +29,7 @@ class ResNetSAN01(nn.Module):
     """
     def __init__(self, dropout=None, version=None, use_film=False, film_scales=[0],
                  use_enhanced_lidar=False,
+                 use_dual_head=False,  # 🆕 Dual-Head parameter
                  min_depth=0.5, max_depth=80.0, **kwargs):  # ← 추가 인자 (이름 유지)
         super().__init__()
         
@@ -38,6 +39,10 @@ class ResNetSAN01(nn.Module):
         if max_depth <= min_depth: max_depth = min_depth + 1.0
         self.min_depth = float(min_depth)
         self.max_depth = float(max_depth)
+        
+        # 🆕 Dual-Head configuration
+        self.use_dual_head = use_dual_head
+        self.is_dual_head = use_dual_head  # Alias for model wrapper
         
         # 🆕 기존 파라미터만 사용
         use_enhanced_lidar = kwargs.get('use_enhanced_lidar', False)  # 기본값 False로 변경
@@ -55,8 +60,19 @@ class ResNetSAN01(nn.Module):
         # ResNet encoder
         self.encoder = ResnetEncoder(num_layers=num_layers, pretrained=True)
         
-        # Standard depth decoder
-        self.decoder = DepthDecoder(num_ch_enc=self.encoder.num_ch_enc)
+        # ========================================
+        # 🆕 Decoder Selection: Dual-Head or Standard
+        # ========================================
+        if use_dual_head:
+            print(f"🔧 Using DualHeadDepthDecoder (max_depth={max_depth}m)")
+            from packnet_sfm.networks.layers.resnet.dual_head_depth_decoder import DualHeadDepthDecoder
+            self.decoder = DualHeadDepthDecoder(
+                num_ch_enc=self.encoder.num_ch_enc,
+                max_depth=max_depth
+            )
+        else:
+            print(f"🔧 Using standard DepthDecoder")
+            self.decoder = DepthDecoder(num_ch_enc=self.encoder.num_ch_enc)
         
         # 설정
         self.use_film = use_film
@@ -244,30 +260,49 @@ class ResNetSAN01(nn.Module):
             
             skip_features = fused_features
         
-                # Decode to get sigmoid outputs (0~1)
-        outputs = self.decoder(skip_features)  # ("disp", i) is sigmoid output [0, 1]
+                # Decode to get outputs
+        outputs = self.decoder(skip_features)
 
-        # 🆕 Return sigmoid outputs directly (post-processing will be done in evaluation)
-        if not hasattr(self, "_sigmoid_mode_logged"):
-            print(f"\n[ResNetSAN01] Returning sigmoid outputs [0, 1] (depth range: [{self.min_depth}, {self.max_depth}])")
-            print(f"[ResNetSAN01] Post-processing (Linear/Log) will be applied during evaluation")
-            self._sigmoid_mode_logged = True
+        # ========================================
+        # 🆕 Dual-Head vs Standard output handling
+        # ========================================
+        if self.use_dual_head:
+            # Dual-Head: outputs already have ("integer", i) and ("fractional", i)
+            if not hasattr(self, "_sigmoid_mode_logged"):
+                print(f"\n[ResNetSAN01] Returning Dual-Head outputs (max_depth={self.max_depth}m)")
+                print(f"[ResNetSAN01] Integer head: [0, {self.max_depth}]m, Fractional head: [0, 1]m")
+                self._sigmoid_mode_logged = True
 
-        if self.training:
-            if hasattr(self, "_maybe_log_disp_stats"):
-                self._maybe_log_disp_stats(outputs)
-            # Training: return 4 scales of sigmoid outputs
-            sigmoid_outputs = [
-                outputs[("disp", 0)],
-                outputs[("disp", 1)],
-                outputs[("disp", 2)],
-                outputs[("disp", 3)],
-            ]
+            if self.training:
+                if hasattr(self, "_maybe_log_disp_stats"):
+                    self._maybe_log_disp_stats(outputs)
+                # Training: return outputs dict directly for Dual-Head loss
+                return outputs, skip_features
+            else:
+                # Inference: return outputs dict
+                return outputs, skip_features
         else:
-            # Inference: return 1 scale of sigmoid output
-            sigmoid_outputs = [outputs[("disp", 0)]]
+            # Standard Single-Head: outputs have ("disp", i) sigmoid [0, 1]
+            if not hasattr(self, "_sigmoid_mode_logged"):
+                print(f"\n[ResNetSAN01] Returning sigmoid outputs [0, 1] (depth range: [{self.min_depth}, {self.max_depth}])")
+                print(f"[ResNetSAN01] Post-processing (Linear/Log) will be applied during evaluation")
+                self._sigmoid_mode_logged = True
 
-        return sigmoid_outputs, skip_features
+            if self.training:
+                if hasattr(self, "_maybe_log_disp_stats"):
+                    self._maybe_log_disp_stats(outputs)
+                # Training: return 4 scales of sigmoid outputs
+                sigmoid_outputs = [
+                    outputs[("disp", 0)],
+                    outputs[("disp", 1)],
+                    outputs[("disp", 2)],
+                    outputs[("disp", 3)],
+                ]
+            else:
+                # Inference: return 1 scale of sigmoid output
+                sigmoid_outputs = [outputs[("disp", 0)]]
+
+            return sigmoid_outputs, skip_features
 
     def forward(self, rgb, input_depth=None, **kwargs):
         """

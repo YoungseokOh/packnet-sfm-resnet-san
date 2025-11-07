@@ -84,26 +84,60 @@ class SemiSupCompletionModel(SelfSupModel):
                         return_logs=False, progress=0.0):
         """
         Calculates the supervised loss.
+        
+        🆕 Dual-Head 모델 자동 감지 및 처리
 
         Parameters
         ----------
-        inv_depths : torch.Tensor [B,1,H,W]
+        inv_depths : torch.Tensor [B,1,H,W] or dict
             Predicted inverse depth maps from the original image
+            OR Dual-Head outputs dict with ("integer", 0) and ("fractional", 0)
         gt_inv_depths : torch.Tensor [B,1,H,W]
             Ground-truth inverse depth maps from the original image
         return_logs : bool
             True if logs are stored
-        progress :
+        progress : float
             Training progress percentage
 
         Returns
         -------
         output : dict
-            Dictionary containing a "loss" scalar a "metrics" dictionary
+            Dictionary containing a "loss" scalar and "metrics" dictionary
         """
-        return self._supervised_loss(
-            inv_depths, gt_inv_depths,
-            return_logs=return_logs, progress=progress)
+        # ========================================
+        # 🆕 Dual-Head 모델 자동 감지
+        # ========================================
+        if hasattr(self, 'depth_net') and hasattr(self.depth_net, 'is_dual_head') and self.depth_net.is_dual_head:
+            # Dual-Head 모델인 경우
+            print("🎯 Using Dual-Head Loss")
+            
+            # Dual-Head loss 초기화 (첫 호출 시)
+            if not hasattr(self, '_dual_head_loss'):
+                from packnet_sfm.losses.dual_head_depth_loss import DualHeadDepthLoss
+                self._dual_head_loss = DualHeadDepthLoss(
+                    max_depth=self.max_depth,
+                    min_depth=self.min_depth,
+                    integer_weight=1.0,
+                    fractional_weight=10.0,
+                    consistency_weight=0.5
+                )
+            
+            # inv_depths는 이미 decoder의 dict 출력 (("integer", 0), ("fractional", 0))
+            # gt_inv_depths는 inverse depth이므로 depth로 변환
+            gt_depth = inv2depth(gt_inv_depths)
+            
+            # Dual-Head loss 계산
+            return self._dual_head_loss(
+                inv_depths,  # dict with ("integer", 0) and ("fractional", 0)
+                gt_depth,
+                return_logs=return_logs,
+                progress=progress
+            )
+        else:
+            # Standard Single-Head 모델
+            return self._supervised_loss(
+                inv_depths, gt_inv_depths,
+                return_logs=return_logs, progress=progress)
 
     def _save_one_step_viz(self, batch, pred_inv_list, tag="rgb"):
         if self._one_step_viz_done:
