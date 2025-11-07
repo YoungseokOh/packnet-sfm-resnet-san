@@ -79,7 +79,8 @@ arch:
 # Checkpoint configuration
 checkpoint:
     filepath: 'checkpoints/resnetsan01_dual_head_ncdb_640x384/'
-    save_top_k: 3                     # Save top 3 checkpoints
+    save_top_k: -1                    # Save all checkpoints (team policy)
+    period: 2                         # Save every 2 epochs (disk optimization)
 
 # Save configuration
 save:
