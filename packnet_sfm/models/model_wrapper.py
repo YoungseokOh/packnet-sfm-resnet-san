@@ -308,11 +308,12 @@ class ModelWrapper(torch.nn.Module):
             else:
                 # Dual-Head: has ('integer', 0) and ('fractional', 0) keys
                 # Reconstruct depth from Dual-Head for visualization
+                # 🆕 PTQ: 256-level quantization
                 from packnet_sfm.networks.layers.resnet.layers import dual_head_to_depth
                 integer_sigmoid = model_output[('integer', 0)][0]
                 fractional_sigmoid = model_output[('fractional', 0)][0]
                 max_depth = getattr(self.model, 'max_depth', 80.0)
-                reconstructed_depth = dual_head_to_depth(integer_sigmoid.unsqueeze(0), fractional_sigmoid.unsqueeze(0), max_depth)
+                reconstructed_depth = dual_head_to_depth(integer_sigmoid.unsqueeze(0), fractional_sigmoid.unsqueeze(0), max_depth, n_integer_levels=256)
                 pred_depth_for_viz = reconstructed_depth[0]
             
             viz_pred_inv_depth = viz_inv_depth(pred_depth_for_viz)
@@ -654,12 +655,13 @@ class ModelWrapper(torch.nn.Module):
             is_dual_head = False
         else:
             # Dual-Head: has ('integer', 0) and ('fractional', 0) keys
+            # 🆕 PTQ: 256-level quantization
             from packnet_sfm.networks.layers.resnet.layers import dual_head_to_depth
             integer_sigmoid = model_output[('integer', 0)]  # (B,1,H,W) sigmoid [0, 1]
             fractional_sigmoid = model_output[('fractional', 0)]  # (B,1,H,W) sigmoid [0, 1]
             max_depth = float(self.config.model.params.max_depth)
             # Reconstruct depth from Dual-Head components
-            depth_from_dual_head = dual_head_to_depth(integer_sigmoid, fractional_sigmoid, max_depth)
+            depth_from_dual_head = dual_head_to_depth(integer_sigmoid, fractional_sigmoid, max_depth, n_integer_levels=256)
             # For evaluation, we need to work with this reconstructed depth
             sigmoid0 = None  # Not used for Dual-Head
             is_dual_head = True

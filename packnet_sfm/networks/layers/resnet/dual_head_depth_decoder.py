@@ -85,9 +85,13 @@ class DualHeadDepthDecoder(nn.Module):
         # ========================================
         # Dual-Head: 각 스케일별로 2개의 출력 헤드
         # ========================================
+        # 🆕 PTQ Quantization: Integer = 256 levels (8-bit)
+        self.n_integer_levels = 256
+        
         for s in self.scales:
-            # Integer Head (정수부 예측: 0~max_depth)
-            self.convs[("integer_conv", s)] = Conv3x3(self.num_ch_dec[s], 1)
+            # Integer Head (256 레벨 양자화: 0~max_depth)
+            # PTQ 친화적: 8-bit quantization으로 256 각각의 깊이 레벨을 나타냄
+            self.convs[("integer_conv", s)] = Conv3x3(self.num_ch_dec[s], self.n_integer_levels)
             
             # Fractional Head (소수부 예측: 0~1m)
             self.convs[("fractional_conv", s)] = Conv3x3(self.num_ch_dec[s], 1)
@@ -95,11 +99,15 @@ class DualHeadDepthDecoder(nn.Module):
         self.decoder = nn.ModuleList(list(self.convs.values()))
         self.sigmoid = nn.Sigmoid()
         
-        print(f"🔧 DualHeadDepthDecoder initialized:")
+        # 🆕 PTQ Quantization parameters
+        self.integer_quantization_interval = max_depth / self.n_integer_levels
+        self.fractional_quantization_interval = 1.0 / 256
+        
+        print(f"🔧 DualHeadDepthDecoder initialized (PTQ 256-level Quantization):")
         print(f"   Max depth: {max_depth}m")
         print(f"   Scales: {list(scales)}")
-        print(f"   Integer quantization interval: {max_depth/255:.4f}m ({max_depth/255*1000:.2f}mm)")
-        print(f"   Fractional quantization interval: {1.0/255:.4f}m ({1.0/255*1000:.2f}mm = 3.92mm)")
+        print(f"   Integer levels: {self.n_integer_levels} → Quantization interval: {self.integer_quantization_interval:.4f}m ({self.integer_quantization_interval*1000:.2f}mm)")
+        print(f"   Fractional quantization interval: {self.fractional_quantization_interval:.6f}m ({self.fractional_quantization_interval*1000:.3f}mm)")
 
     def forward(self, input_features):
         """
@@ -141,9 +149,23 @@ class DualHeadDepthDecoder(nn.Module):
             # Dual-Head Outputs
             # ========================================
             if i in self.scales:
-                # Integer Head: [0, 1] sigmoid → represents [0, max_depth]
-                integer_raw = self.convs[("integer_conv", i)](x)
-                self.outputs[("integer", i)] = self.sigmoid(integer_raw)
+                # Integer Head: 256-way classification → argmax + normalized
+                # 🆕 PTQ: Each of 256 channels represents one quantization level
+                integer_raw = self.convs[("integer_conv", i)](x)  # [B, 256, H, W]
+                
+                # Apply softmax to get probability distribution over 256 levels
+                integer_probs = torch.nn.functional.softmax(integer_raw, dim=1)  # [B, 256, H, W]
+                
+                # Get the argmax for each spatial location (hard quantization)
+                integer_levels = torch.argmax(integer_probs, dim=1, keepdim=True).float()  # [B, 1, H, W]
+                
+                # Normalize to [0, 1] range (each level: 0~255 → 0~1)
+                integer_normalized = integer_levels / (self.n_integer_levels - 1)  # [B, 1, H, W]
+                
+                self.outputs[("integer", i)] = integer_normalized
+                
+                # Also store the raw probabilities for soft quantization during training (optional)
+                self.outputs[("integer_raw", i)] = integer_probs
                 
                 # Fractional Head: [0, 1] sigmoid → represents [0, 1]m
                 fractional_raw = self.convs[("fractional_conv", i)](x)

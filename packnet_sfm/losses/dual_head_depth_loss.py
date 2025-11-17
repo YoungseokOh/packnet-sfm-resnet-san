@@ -129,7 +129,8 @@ class DualHeadDepthLoss(LossBase):
         # ========================================
         # 1. Decompose GT depth
         # ========================================
-        integer_gt, fractional_gt = decompose_depth(depth_gt, self.max_depth)
+        # 🆕 PTQ: Use 256-level quantization for integer part
+        integer_gt, fractional_gt = decompose_depth(depth_gt, self.max_depth, n_integer_levels=256)
         
         # ========================================
         # 2. Integer Loss (coarse prediction)
@@ -154,7 +155,8 @@ class DualHeadDepthLoss(LossBase):
         # ========================================
         # 4. Consistency Loss (전체 깊이 일관성)
         # ========================================
-        depth_pred = dual_head_to_depth(integer_pred, fractional_pred, self.max_depth)
+        # 🆕 PTQ: Use 256-level quantization
+        depth_pred = dual_head_to_depth(integer_pred, fractional_pred, self.max_depth, n_integer_levels=256)
         consistency_loss = F.l1_loss(
             depth_pred[mask],
             depth_gt[mask],
