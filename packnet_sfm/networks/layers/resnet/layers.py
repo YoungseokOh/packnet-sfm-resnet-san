@@ -73,23 +73,18 @@ def upsample(x):
 # Dual-Head Helper Functions (ST2 Implementation)
 # ==============================================================================
 
-def dual_head_to_depth(integer_normalized, fractional_sigmoid, max_depth, n_integer_levels=256):
+def dual_head_to_depth(integer_sigmoid, fractional_sigmoid, max_depth):
     """
-    Convert dual-head outputs to depth
-    
-    🆕 PTQ Quantization: Integer is now discretized to 256 levels
+    Convert dual-head sigmoid outputs to depth
     
     Parameters
     ----------
-    integer_normalized : torch.Tensor [B, 1, H, W]
-        Integer part normalized to [0, 1] representing quantization level
-        (e.g., 0.0 = level 0, 0.5 = level 128, 1.0 = level 255)
+    integer_sigmoid : torch.Tensor [B, 1, H, W]
+        Integer part in sigmoid space [0, 1]
     fractional_sigmoid : torch.Tensor [B, 1, H, W]
-        Fractional part in sigmoid space [0, 1]m
+        Fractional part in sigmoid space [0, 1]
     max_depth : float
         Maximum depth for integer scaling
-    n_integer_levels : int
-        Number of quantization levels (default: 256 for 8-bit PTQ)
     
     Returns
     -------
@@ -98,28 +93,26 @@ def dual_head_to_depth(integer_normalized, fractional_sigmoid, max_depth, n_inte
     
     Example
     -------
-    >>> integer_norm = torch.tensor([[[[0.333]]]])  # Normalized level
+    >>> integer_sig = torch.tensor([[[[0.333]]]])  # 0.333 * 15 = 5.0
     >>> fractional_sig = torch.tensor([[[[0.5]]]])  # 0.5m
-    >>> depth = dual_head_to_depth(integer_norm, fractional_sig, 15.0, n_integer_levels=256)
+    >>> depth = dual_head_to_depth(integer_sig, fractional_sig, 15.0)
+    >>> print(depth)  # 5.5m
     """
-    # Integer part: normalize to actual meters
-    # integer_meters = normalized * max_depth
-    integer_part = integer_normalized * max_depth
+    # Integer part: [0, 1] → [0, max_depth]
+    integer_part = integer_sigmoid * max_depth
     
     # Fractional part: already [0, 1]m
     fractional_part = fractional_sigmoid
     
-    # Combine: final depth = integer_part + fractional_part
+    # Combine
     depth = integer_part + fractional_part
     
     return depth
 
 
-def decompose_depth(depth_gt, max_depth, n_integer_levels=256):
+def decompose_depth(depth_gt, max_depth):
     """
     Decompose ground truth depth into integer and fractional parts
-    
-    🆕 PTQ Quantization: Integer part is quantized to 256 discrete levels
     
     Parameters
     ----------
@@ -127,60 +120,47 @@ def decompose_depth(depth_gt, max_depth, n_integer_levels=256):
         Ground truth depth in meters
     max_depth : float
         Maximum depth for integer normalization
-    n_integer_levels : int
-        Number of quantization levels for integer head (default: 256 for 8-bit PTQ)
     
     Returns
     -------
     integer_gt : torch.Tensor [B, 1, H, W]
-        Integer part normalized to [0, 1] for n_integer_levels
-        (e.g., level 0 = 0m, level 128 = max_depth*128/256, level 255 = max_depth)
+        Integer part in sigmoid space [0, 1]
     fractional_gt : torch.Tensor [B, 1, H, W]
         Fractional part [0, 1]m
     
     Example
     -------
-    >>> depth = torch.tensor([[[[5.7]]]])  # 5.7m, max_depth=15.0
-    >>> integer_gt, frac_gt = decompose_depth(depth, 15.0, n_integer_levels=256)
-    >>> # Integer level ≈ (5.0 / 15.0) * 255 ≈ 85 level
-    >>> # Fractional = 0.7m
+    >>> depth = torch.tensor([[[[5.7]]]])  # 5.7m
+    >>> integer_gt, frac_gt = decompose_depth(depth, 15.0)
+    >>> print(integer_gt)  # 5.0 / 15.0 = 0.333
+    >>> print(frac_gt)     # 0.7m
     """
     import torch
     
-    # Integer part: Quantize to n_integer_levels discrete levels
-    # depth_in_levels = (depth_gt / max_depth) * (n_integer_levels - 1)
-    integer_levels = torch.round((depth_gt / max_depth) * (n_integer_levels - 1))
-    integer_levels = torch.clamp(integer_levels, min=0, max=n_integer_levels - 1)
+    # Integer part: floor(depth)
+    integer_meters = torch.floor(depth_gt)
+    integer_gt = integer_meters / max_depth  # Normalize to [0, 1]
     
-    # Normalize integer levels to [0, 1]
-    integer_gt = integer_levels / (n_integer_levels - 1)  # [B, 1, H, W]
-    
-    # Fractional part: depth - (integer_level * max_depth / (n_integer_levels - 1))
-    integer_meters = (integer_levels / (n_integer_levels - 1)) * max_depth
-    fractional_gt = depth_gt - integer_meters  # [B, 1, H, W] in [0, 1]m range
-    
-    # Clamp fractional part to valid range [0, 1]
-    fractional_gt = torch.clamp(fractional_gt, min=0, max=1.0)
+    # Fractional part: depth - floor(depth)
+    fractional_gt = depth_gt - integer_meters  # Already [0, 1]m
     
     return integer_gt, fractional_gt
 
 
-def dual_head_to_inv_depth(integer_normalized, fractional_sigmoid, max_depth, min_depth=0.5, n_integer_levels=256):
+def dual_head_to_inv_depth(integer_sigmoid, fractional_sigmoid, max_depth, min_depth=0.5):
     """
     Convert dual-head outputs to inverse depth (for compatibility with existing code)
     
     Parameters
     ----------
-    integer_normalized : torch.Tensor
-        Integer part normalized [0, 1]
+    integer_sigmoid : torch.Tensor
+        Integer part sigmoid output
     fractional_sigmoid : torch.Tensor
         Fractional part sigmoid output
     max_depth : float
         Maximum depth
     min_depth : float
         Minimum depth
-    n_integer_levels : int
-        Number of quantization levels (default: 256)
     
     Returns
     -------
@@ -188,7 +168,7 @@ def dual_head_to_inv_depth(integer_normalized, fractional_sigmoid, max_depth, mi
         Inverse depth [1/max_depth, 1/min_depth]
     """
     # First convert to depth
-    depth = dual_head_to_depth(integer_normalized, fractional_sigmoid, max_depth, n_integer_levels)
+    depth = dual_head_to_depth(integer_sigmoid, fractional_sigmoid, max_depth)
     
     # Clamp to valid range
     import torch
