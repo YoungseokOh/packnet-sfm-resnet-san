@@ -157,6 +157,7 @@ def upsample_output(output, mode='nearest', align_corners=None):
     ----------
     output : dict
         Dictionary of model outputs (e.g. with keys like 'inv_depths' and 'uncertainty')
+        Can also contain Dual-Head outputs with keys like ('integer', 0) and ('fractional', 0)
     mode : str
         Which interpolation mode is used
     align_corners: bool or None
@@ -167,14 +168,29 @@ def upsample_output(output, mode='nearest', align_corners=None):
     output : dict
         Upsampled output
     """
+    # Handle Standard outputs (string keys)
     for key in filter_dict(output, [
         'inv_depths', 'uncertainty'
     ]):
         output[key] = interpolate_scales(
             output[key], mode=mode, align_corners=align_corners)
+    
+    # Handle Standard context outputs
     for key in filter_dict(output, [
         'inv_depths_context'
     ]):
         output[key] = [interpolate_scales(
             val, mode=mode, align_corners=align_corners) for val in output[key]]
+    
+    # Handle Dual-Head outputs (tuple keys like ('integer', 0), ('fractional', 0))
+    # Dual-Head outputs are single tensors, NOT lists
+    dual_head_keys = [key for key in output.keys() if isinstance(key, tuple) and len(key) == 2]
+    for key in dual_head_keys:
+        # Dual-Head output: single tensor [B, 1, H, W], wrap in list for interpolate_scales
+        # then unwrap to get single tensor back
+        tensor_list = [output[key]]
+        upsampled_list = interpolate_scales(
+            tensor_list, mode=mode, align_corners=align_corners)
+        output[key] = upsampled_list[0]
+    
     return output

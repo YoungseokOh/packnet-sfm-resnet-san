@@ -38,31 +38,31 @@ model:
     # Depth range configuration (NCDB: near-field)
     params:
         crop: ''
-        min_depth: 0.1                # ⭐ NCDB near-field minimum
-        max_depth: 30.0               # ⭐ NCDB near-field maximum
+        min_depth: 0.5                # ⭐ NCDB near-field minimum
+        max_depth: 15.0               # ⭐ NCDB near-field maximum
         scale_output: 'top-center'
         use_log_space: false
 
 # Dataset configuration (NCDB)
 datasets:
     augmentation:
-        image_shape: [384, 640]
+        image_shape: [512, 640]
     train:
         batch_size: 8
         dataset: ['ncdb']
-        path: ['/workspace/data/ncdb-cls-640x384']
+        path: ['/workspace/data/ncdb-cls-640x512']
         split: ['splits/combined_train.json']
         mask_file: ['binary_mask.png']
         use_mask: [false]
     validation:
         dataset: ['ncdb']
-        path: ['/workspace/data/ncdb-cls-640x384']
+        path: ['/workspace/data/ncdb-cls-640x512']
         split: ['splits/combined_val.json']
         mask_file: ['binary_mask.png']
         use_mask: [false]
     test:
         dataset: ['ncdb']
-        path: ['/workspace/data/ncdb-cls-640x384']
+        path: ['/workspace/data/ncdb-cls-640x512']
         split: ['splits/combined_test.json']
         mask_file: ['binary_mask.png']
         use_mask: [false]
@@ -78,13 +78,13 @@ arch:
 
 # Checkpoint configuration
 checkpoint:
-    filepath: 'checkpoints/resnetsan01_dual_head_fixed_ncdb_640x384_0.1_to_30m/'
+    filepath: 'checkpoints/resnetsan01_dual_head_ncdb_640x512/'
     save_top_k: -1                    # Save all checkpoints (team policy)
     period: 2                         # Save every 2 epochs (disk optimization)
 
 # Save configuration
 save:
-    folder: 'outputs/resnetsan01_dual_head_fixed_ncdb_640x384_0.1_to_30m/'
+    folder: 'outputs/resnetsan01_dual_head_ncdb_640x512/'
 
 # Tensorboard logging
 tensorboard:

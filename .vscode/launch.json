@@ -93,7 +93,7 @@
         "console": "integratedTerminal",
         "cwd": "${workspaceFolder}",
         // Training
-        "args": ["configs/train_resnet_san_ncdb_640x384.yaml"],
+        "args": ["configs/train_resnet_san_ncdb_dual_head_640x384.yaml"],
         // "args": ["configs/train_resnet_san_ncdb.yaml"],
         // Evaliation
         // "args": 

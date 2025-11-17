@@ -109,8 +109,6 @@ class SemiSupCompletionModel(SelfSupModel):
         # ========================================
         if hasattr(self, 'depth_net') and hasattr(self.depth_net, 'is_dual_head') and self.depth_net.is_dual_head:
             # Dual-Head 모델인 경우
-            print("🎯 Using Dual-Head Loss")
-            
             # Dual-Head loss 초기화 (첫 호출 시)
             if not hasattr(self, '_dual_head_loss'):
                 from packnet_sfm.losses.dual_head_depth_loss import DualHeadDepthLoss
@@ -494,23 +492,35 @@ class SemiSupCompletionModel(SelfSupModel):
             # 🆕 Now supports both LINEAR and LOG space interpolation!
             from packnet_sfm.utils.post_process_depth import sigmoid_to_inv_depth
             
-            # Convert sigmoid outputs to bounded inverse depth
-            sigmoid_outputs = self_sup_output['inv_depths']
-            bounded_inv_depths = [
-                sigmoid_to_inv_depth(sig, self.min_depth, self.max_depth, use_log_space=self.use_log_space)
-                for sig in sigmoid_outputs
-            ]
-            
-            # (호출 형태 그대로) supervised loss
-            # ✅ GT depth를 inverse depth로 변환하여 전달 (inverse depth 도메인에서 비교)
-            sup_output = self.supervised_loss(
-                bounded_inv_depths, depth2inv(batch['depth']),
-                return_logs=return_logs, progress=progress)
+            # ========================================
+            # Handle both Single-Head and Dual-Head outputs
+            # ========================================
+            if 'inv_depths' in self_sup_output:
+                # Single-Head: outputs have 'inv_depths' key
+                sigmoid_outputs = self_sup_output['inv_depths']
+                bounded_inv_depths = [
+                    sigmoid_to_inv_depth(sig, self.min_depth, self.max_depth, use_log_space=self.use_log_space)
+                    for sig in sigmoid_outputs
+                ]
+                # Pass to supervised_loss (which handles Single-Head)
+                sup_output = self.supervised_loss(
+                    bounded_inv_depths, depth2inv(batch['depth']),
+                    return_logs=return_logs, progress=progress)
+            else:
+                # Dual-Head: outputs have ('integer', i) and ('fractional', i) keys
+                # Pass the original dict directly to supervised_loss 
+                # (which will detect Dual-Head and use DualHeadDepthLoss)
+                sup_output = self.supervised_loss(
+                    self_sup_output,  # Pass original dict with tuple keys
+                    depth2inv(batch['depth']),
+                    return_logs=return_logs, progress=progress)
 
-            try:
-                self._save_loss_inv_debug(bounded_inv_depths, depth2inv(batch['depth']))
-            except Exception as e:
-                print("[LOSS_INV_VIZ][ERROR]", e)
+            # Debug visualization (only for Single-Head, Dual-Head doesn't need this)
+            if 'inv_depths' in self_sup_output:
+                try:
+                    self._save_loss_inv_debug(bounded_inv_depths, depth2inv(batch['depth']))
+                except Exception as e:
+                    print("[LOSS_INV_VIZ][ERROR]", e)
 
             loss += self.supervised_loss_weight * sup_output['loss']
 

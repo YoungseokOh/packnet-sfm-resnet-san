@@ -300,7 +300,22 @@ class ModelWrapper(torch.nn.Module):
 
         if self.loggers and batch_idx % self.config.tensorboard.log_frequency == 0:
             rgb_original = batch['rgb_original'][0].cpu()  # (C, H, W)
-            viz_pred_inv_depth = viz_inv_depth(model_output['inv_depths'][0][0])
+            
+            # Handle both Single-Head and Dual-Head outputs
+            if 'inv_depths' in model_output:
+                # Single-Head: has 'inv_depths' key
+                pred_depth_for_viz = model_output['inv_depths'][0][0]
+            else:
+                # Dual-Head: has ('integer', 0) and ('fractional', 0) keys
+                # Reconstruct depth from Dual-Head for visualization
+                from packnet_sfm.networks.layers.resnet.layers import dual_head_to_depth
+                integer_sigmoid = model_output[('integer', 0)][0]
+                fractional_sigmoid = model_output[('fractional', 0)][0]
+                max_depth = getattr(self.model, 'max_depth', 80.0)
+                reconstructed_depth = dual_head_to_depth(integer_sigmoid.unsqueeze(0), fractional_sigmoid.unsqueeze(0), max_depth)
+                pred_depth_for_viz = reconstructed_depth[0]
+            
+            viz_pred_inv_depth = viz_inv_depth(pred_depth_for_viz)
             if isinstance(viz_pred_inv_depth, np.ndarray):
                 viz_pred_inv_depth = torch.from_numpy(viz_pred_inv_depth).float()
             viz_pred_inv_depth = viz_pred_inv_depth.permute(2, 0, 1)
@@ -340,35 +355,47 @@ class ModelWrapper(torch.nn.Module):
         """
         Processes a validation batch.
         """
-        output = self.evaluate_depth(batch)
-        if self.loggers:
-            rgb_original = batch['rgb'][0].cpu()
-            viz_pred_inv_depth = viz_inv_depth(output['inv_depth'][0])
-            if isinstance(viz_pred_inv_depth, np.ndarray):
-                viz_pred_inv_depth = torch.from_numpy(viz_pred_inv_depth).float()
-            viz_pred_inv_depth = viz_pred_inv_depth.permute(2, 0, 1)
+        try:
+            output = self.evaluate_depth(batch)
+        except Exception as e:
+            print(f"⚠️ Error processing validation batch {batch_idx}: {e}")
+            return {
+                'idx': batch.get('idx', batch_idx),
+                'depth': torch.tensor([0.0])
+            }
+        
+        if self.loggers and 'inv_depth' in output:
+            try:
+                rgb_original = batch['rgb'][0].cpu()
+                viz_pred_inv_depth = viz_inv_depth(output['inv_depth'][0])
+                if isinstance(viz_pred_inv_depth, np.ndarray):
+                    viz_pred_inv_depth = torch.from_numpy(viz_pred_inv_depth).float()
+                viz_pred_inv_depth = viz_pred_inv_depth.permute(2, 0, 1)
 
-            mask = None
-            if 'mask' in batch and batch['mask'] is not None:
-                mask = batch['mask'][0].cpu()
-                if mask.dim() == 3 and mask.shape[0] == 1:
-                    mask = mask.squeeze(0)
-                viz_pred_inv_depth_masked = viz_pred_inv_depth * mask.unsqueeze(0).float()
-            else:
-                viz_pred_inv_depth_masked = viz_pred_inv_depth
+                mask = None
+                if 'mask' in batch and batch['mask'] is not None:
+                    mask = batch['mask'][0].cpu()
+                    if mask.dim() == 3 and mask.shape[0] == 1:
+                        mask = mask.squeeze(0)
+                    viz_pred_inv_depth_masked = viz_pred_inv_depth * mask.unsqueeze(0).float()
+                else:
+                    viz_pred_inv_depth_masked = viz_pred_inv_depth
 
-            total_batches_per_epoch = getattr(self, '_val_total_batches', 1000) or 1000
-            global_step = self.current_epoch * total_batches_per_epoch + batch_idx
+                total_batches_per_epoch = getattr(self, '_val_total_batches', 1000) or 1000
+                global_step = self.current_epoch * total_batches_per_epoch + batch_idx
 
-            for logger in self.loggers:
-                logger.writer.add_image('val/rgb_original', rgb_original, global_step=global_step)
-                logger.writer.add_image('val/pred_inv_depth_masked', viz_pred_inv_depth_masked, global_step=global_step)
-                logger.writer.add_image('val/pred_inv_depth_unmasked', viz_pred_inv_depth, global_step=global_step)
-                if mask is not None:
-                    logger.writer.add_image('val/mask', mask.unsqueeze(0).float(), global_step=global_step)
+                for logger in self.loggers:
+                    logger.writer.add_image('val/rgb_original', rgb_original, global_step=global_step)
+                    logger.writer.add_image('val/pred_inv_depth_masked', viz_pred_inv_depth_masked, global_step=global_step)
+                    logger.writer.add_image('val/pred_inv_depth_unmasked', viz_pred_inv_depth, global_step=global_step)
+                    if mask is not None:
+                        logger.writer.add_image('val/mask', mask.unsqueeze(0).float(), global_step=global_step)
+            except Exception as e:
+                print(f"⚠️ Error logging validation images: {e}")
+        
         return {
-            'idx': batch['idx'],
-            **output['metrics'],
+            'idx': batch.get('idx', batch_idx),
+            **output.get('metrics', {})
         }
 
     def test_step(self, batch, *args):
@@ -617,8 +644,25 @@ class ModelWrapper(torch.nn.Module):
                         print(f"  ⚠️ WARNING: Max > 500, seems like 256x scaled!")
         
         # ★ STEP 2: Model forward → sigmoid outputs [0, 1]
-        sigmoid_outputs = self.model(batch)['inv_depths']  # list, first scale: (B,1,H,W)
-        sigmoid0 = sigmoid_outputs[0]  # (B,1,H,W) with values in [0, 1]
+        model_output = self.model(batch)
+        
+        # Handle both Single-Head and Dual-Head outputs
+        if 'inv_depths' in model_output:
+            # Single-Head: has 'inv_depths' key - sigmoid [0, 1]
+            sigmoid_outputs = model_output['inv_depths']  # list, first scale: (B,1,H,W)
+            sigmoid0 = sigmoid_outputs[0]  # (B,1,H,W) with values in [0, 1]
+            is_dual_head = False
+        else:
+            # Dual-Head: has ('integer', 0) and ('fractional', 0) keys
+            from packnet_sfm.networks.layers.resnet.layers import dual_head_to_depth
+            integer_sigmoid = model_output[('integer', 0)]  # (B,1,H,W) sigmoid [0, 1]
+            fractional_sigmoid = model_output[('fractional', 0)]  # (B,1,H,W) sigmoid [0, 1]
+            max_depth = float(self.config.model.params.max_depth)
+            # Reconstruct depth from Dual-Head components
+            depth_from_dual_head = dual_head_to_depth(integer_sigmoid, fractional_sigmoid, max_depth)
+            # For evaluation, we need to work with this reconstructed depth
+            sigmoid0 = None  # Not used for Dual-Head
+            is_dual_head = True
         
         # ★ STEP 3: Get depth range from config
         min_depth = float(self.config.model.params.min_depth)
@@ -630,20 +674,25 @@ class ModelWrapper(torch.nn.Module):
         # ★ STEP 4: Convert sigmoid to bounded inverse depth (CRITICAL!)
         # This must match the training-time conversion!
         from packnet_sfm.utils.post_process_depth import sigmoid_to_inv_depth
-        inv_depth = sigmoid_to_inv_depth(sigmoid0, min_depth, max_depth, use_log_space=use_log_space)
+        from packnet_sfm.utils.depth import inv2depth, depth2inv
         
-        # ★ STEP 5: Convert inverse depth to depth (same as original code)
-        from packnet_sfm.utils.depth import inv2depth
-        depth_pred = inv2depth(inv_depth)
-        
-        # ★ STEP 6: Also compute with both Linear and Log transformations for comparison
-        # Linear: matches linear training
-        # Log: matches log training
-        depth_linear = sigmoid_to_depth_linear(sigmoid0, min_depth, max_depth)
-        depth_log = sigmoid_to_depth_log(sigmoid0, min_depth, max_depth)
+        # 🆕 For Dual-Head, we already have depth, not sigmoid!
+        if is_dual_head:
+            # Dual-Head: depth_from_dual_head is already actual depth in meters
+            depth_pred = depth_from_dual_head
+            inv_depth = depth2inv(depth_pred)
+            # For comparison, set linear and log to the same (no sigmoid conversion)
+            depth_linear = depth_pred.clone()
+            depth_log = depth_pred.clone()
+        else:
+            # Single-Head: sigmoid0 is actual sigmoid [0,1], needs conversion
+            inv_depth = sigmoid_to_inv_depth(sigmoid0, min_depth, max_depth, use_log_space=use_log_space)
+            depth_pred = inv2depth(inv_depth)
+            depth_linear = sigmoid_to_depth_linear(sigmoid0, min_depth, max_depth)
+            depth_log = sigmoid_to_depth_log(sigmoid0, min_depth, max_depth)
         
         # ★ STEP 5: Normalize GT depth to (B,1,H,W) on correct device
-        device = sigmoid0.device
+        device = depth_pred.device
         def _to_b1hw(x):
             if x is None:
                 return None

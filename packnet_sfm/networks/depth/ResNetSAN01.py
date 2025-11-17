@@ -309,29 +309,47 @@ class ResNetSAN01(nn.Module):
         🆕 Enhanced forward pass with improved LiDAR integration
         """
         if not self.training:
-            inv_depths, _ = self.run_network(rgb, input_depth)
-            return {'inv_depths': inv_depths}
+            outputs, _ = self.run_network(rgb, input_depth)
+            
+            # For Dual-Head: return dict directly (already in correct format)
+            # For Standard: convert sigmoid list to 'inv_depths' dict
+            if self.use_dual_head:
+                return outputs  # Already dict with ('integer', i) and ('fractional', i)
+            else:
+                return {'inv_depths': outputs}  # Convert sigmoid list to dict
 
         output = {}
         
         # RGB-only forward pass
         inv_depths_rgb, skip_feat_rgb = self.run_network(rgb)
-        output['inv_depths'] = inv_depths_rgb
+        
+        # For Dual-Head: inv_depths_rgb is already a dict with dual-head outputs
+        # For Standard: inv_depths_rgb is a list of sigmoid values
+        if self.use_dual_head:
+            output = inv_depths_rgb  # Copy dual-head dict directly
+        else:
+            output['inv_depths'] = inv_depths_rgb
         
         if input_depth is None:
-            return {'inv_depths': inv_depths_rgb}
+            return output
         
         # RGB+D forward pass with enhanced processing
         inv_depths_rgbd, skip_feat_rgbd = self.run_network(rgb, input_depth)
-        output['inv_depths_rgbd'] = inv_depths_rgbd
         
-        # 🆕 Enhanced consistency loss with feature-level weighting
-        feature_weights = torch.softmax(torch.abs(self.weight), dim=0)
-        weighted_loss = sum([
-            weight * ((feat_rgbd.detach() - feat_rgb) ** 2).mean()
-            for weight, feat_rgbd, feat_rgb in zip(feature_weights, skip_feat_rgbd, skip_feat_rgb)
-        ]) / len(skip_feat_rgbd)
-        
-        output['depth_loss'] = weighted_loss
-        
-        return output
+        if self.use_dual_head:
+            # For dual-head, don't mix RGB and RGB+D outputs in forward
+            # This is handled at the loss level
+            return output
+        else:
+            output['inv_depths_rgbd'] = inv_depths_rgbd
+            
+            # 🆕 Enhanced consistency loss with feature-level weighting
+            feature_weights = torch.softmax(torch.abs(self.weight), dim=0)
+            weighted_loss = sum([
+                weight * ((feat_rgbd.detach() - feat_rgb) ** 2).mean()
+                for weight, feat_rgbd, feat_rgb in zip(feature_weights, skip_feat_rgbd, skip_feat_rgb)
+            ]) / len(skip_feat_rgbd)
+            
+            output['depth_loss'] = weighted_loss
+            
+            return output
