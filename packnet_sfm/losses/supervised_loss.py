@@ -18,6 +18,7 @@ from packnet_sfm.losses.ssi_silog_loss import SSISilogLoss
 
 ########################################################################################################################
 
+
 class BerHuLoss(nn.Module):
     """Class implementing the BerHu loss."""
     def __init__(self, threshold=0.2):
@@ -91,10 +92,15 @@ def get_loss_func(supervised_method, **kwargs):
     elif supervised_method.endswith('berhu'):
         return BerHuLoss()
     elif supervised_method.endswith('ssi-silog'):
-        # 🆕 클래스 기반 SSI-Silog 손실 (선택적으로 YAML min/max depth 전달)
+        # 🆕 클래스 기반 SSI-Silog 손실 (YAML에서 파라미터 전달 가능)
         return SSISilogLoss(
             min_depth=kwargs.get('min_depth', None),
             max_depth=kwargs.get('max_depth', None),
+            ssi_weight=kwargs.get('ssi_weight', 0.7),
+            silog_weight=kwargs.get('silog_weight', 0.3),
+            alpha=kwargs.get('alpha', 0.85),
+            silog_ratio=kwargs.get('silog_ratio', 10),
+            silog_ratio2=kwargs.get('silog_ratio2', 0.85),
         )
     # elif supervised_method.endswith('ssi-silog-nearfield'):
     #     # 🆕 SSI-Silog with Optional Near-Field Weighting

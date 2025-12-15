@@ -15,65 +15,87 @@ from PIL import Image
 import cv2
 from pathlib import Path
 import argparse
+from typing import List, Optional, Tuple
+from datetime import datetime
 
 
 # ========== VADAS Fisheye Camera Model (from ref code) ==========
 
 class VADASFisheyeCameraModel:
-    """VADAS Polynomial Fisheye Camera Model"""
-    def __init__(self, intrinsic, image_size=(640, 384), original_size=None):
-        self.original_intrinsic = intrinsic.copy()
-        self.image_size = image_size
-        
-        # NO SCALING - assume intrinsic is already for target size
+    """VADAS Polynomial Fisheye Camera Model, assuming +X is forward."""
+    def __init__(self, intrinsic: List[float], image_size: Optional[Tuple[int, int]] = None):
+        if len(intrinsic) < 11:
+            raise ValueError("VADAS intrinsic must have at least 11 parameters.")
         self.k = intrinsic[0:7]
         self.s = intrinsic[7]
         self.div = intrinsic[8]
         self.ux = intrinsic[9]
         self.uy = intrinsic[10]
+        self.image_size = image_size
+        self.original_intrinsic = intrinsic.copy()  # [ADD] Store original intrinsic
+        self.scale_x = 1.0  # [ADD] Aspect ratio scale factors
+        self.scale_y = 1.0
 
-    def _poly_eval(self, coeffs, x):
+    def _poly_eval(self, coeffs: List[float], x: float) -> float:
         res = 0.0
         for c in reversed(coeffs):
             res = res * x + c
         return res
-
-    def project_point(self, Xc, Yc, Zc):
+    
+    def scale_intrinsics(self, scale_x: float, scale_y: float) -> None:
+        """[ADD] Scale intrinsic parameters for different image sizes
+        
+        Based on verified test_640x384_div_comparison.py with aspect ratio support:
+        - ux, uy scale by multiplying with scale factors
+        - div remains UNCHANGED (original value)
+        - scale_x, scale_y are stored and applied in project_point()
+        - k, s coefficients do NOT scale (normalized coordinates)
         """
-        Project 3D camera coordinate to 2D image pixel
-        Returns: (u, v, valid)
+        # Principal point offset scales with image size
+        self.ux = self.original_intrinsic[9] * scale_x
+        self.uy = self.original_intrinsic[10] * scale_y
+        
+        # [CRITICAL] div stays at original value!
+        # Aspect ratio scaling is applied directly in project_point()
+        self.div = self.original_intrinsic[8]
+        
+        # Store scale factors for use in project_point()
+        self.scale_x = scale_x
+        self.scale_y = scale_y
+
+    def project_point(self, Xc: float, Yc: float, Zc: float) -> Tuple[int, int, bool]:
+        """
+        Project 3D camera coordinates to 2D image coordinates.
+        
+        Based on ref_camera_lidar_projector.py with aspect ratio scaling support.
+        Aspect ratio is applied via self.scale_x and self.scale_y to the final coordinates.
         """
         nx = -Yc
         ny = -Zc
-        
         dist = math.hypot(nx, ny)
-        
         if dist < sys.float_info.epsilon:
             dist = sys.float_info.epsilon
-        
         cosPhi = nx / dist
         sinPhi = ny / dist
-        
         theta = math.atan2(dist, Xc)
 
-        if Xc <= 0:  # Point is behind the camera
+        if Xc < 0:
             return 0, 0, False
-        
-        xd = theta * self.s
 
+        xd = theta * self.s
         if abs(self.div) < 1e-9:
             return 0, 0, False
         
         rd = self._poly_eval(self.k, xd) / self.div
-
         if math.isinf(rd) or math.isnan(rd):
             return 0, 0, False
 
-        img_w_half = self.image_size[0] / 2
-        img_h_half = self.image_size[1] / 2
+        img_w_half = (self.image_size[0] / 2) if self.image_size else 0
+        img_h_half = (self.image_size[1] / 2) if self.image_size else 0
 
-        u = rd * cosPhi + self.ux + img_w_half
-        v = rd * sinPhi + self.uy + img_h_half
+        # [ADD] Apply aspect ratio scaling to rd components
+        u = rd * cosPhi * self.scale_x + self.ux + img_w_half
+        v = rd * sinPhi * self.scale_y + self.uy + img_h_half
         
         return int(round(u)), int(round(v)), True
 
@@ -95,29 +117,52 @@ class VADASFisheyeCameraModel:
         img_w_half = self.image_size[0] / 2
         img_h_half = self.image_size[1] / 2
         
-        # Get normalized pixel coordinates
-        xd = u - self.ux - img_w_half
-        yd = v - self.uy - img_h_half
+        # Step 1: (u, v) → (rd_x, rd_y) → rd
+        # In project_point: u = rd * cosPhi * scale_x + ux + img_w_half
+        rd_x = (u - self.ux - img_w_half) / self.scale_x
+        rd_y = (v - self.uy - img_h_half) / self.scale_y
         
-        rd = math.sqrt(xd**2 + yd**2)
+        rd = math.sqrt(rd_x**2 + rd_y**2)
         
         if rd < 1e-9:
             # Center pixel, looking straight ahead (no lateral offset)
             return Xc_depth, 0.0, 0.0
         
-        cosPhi = xd / rd
-        sinPhi = yd / rd
+        cosPhi = rd_x / rd
+        sinPhi = rd_y / rd
         
-        # Approximate theta from rd
-        # Ideally should invert the polynomial, but we use linear approximation
-        theta = rd / self.s  # Simplified: assuming linear relationship
+        # Step 2: rd → xd (inverse of polynomial)
+        # Forward: rd = polynomial(xd) / div
+        # Inverse: xd = polynomial_inverse(rd * div)
+        target = rd * self.div
         
+        # Newton-Raphson iteration to solve polynomial(xd) = target
+        xd = target  # Initial guess
+        for _ in range(10):  # 10 iterations should be enough
+            # Evaluate polynomial and its derivative
+            poly_val = self._poly_eval(self.k, xd)
+            
+            # Derivative of polynomial
+            poly_deriv = 0.0
+            for i, c in enumerate(reversed(self.k[1:])):  # Skip constant term
+                poly_deriv = poly_deriv * xd + c * (len(self.k) - i - 1)
+            
+            if abs(poly_deriv) < 1e-9:
+                break
+            
+            # Newton-Raphson update
+            xd = xd - (poly_val - target) / poly_deriv
+        
+        # Step 3: xd → theta
+        theta = xd / self.s
+        
+        # Step 4: (theta, phi, Xc) → (Yc, Zc)
         # In VADAS fisheye projection:
         # nx = -Yc, ny = -Zc
         # dist = sqrt(nx^2 + ny^2) = sqrt(Yc^2 + Zc^2)
         # theta = atan2(dist, Xc)
         # 
-        # Therefore: tan(theta) = dist / Xc = sqrt(Yc^2 + Zc^2) / Xc
+        # Therefore: tan(theta) = dist / Xc
         # And: cosPhi = nx/dist = -Yc/dist, sinPhi = ny/dist = -Zc/dist
         # 
         # Solving: Yc = -dist * cosPhi, Zc = -dist * sinPhi
@@ -130,8 +175,6 @@ class VADASFisheyeCameraModel:
         Zc = -dist * sinPhi
         
         return Xc_depth, Yc, Zc
-        
-        return Xc, Yc, Zc
 
 
 # Default calibration for NCDB dataset
@@ -165,78 +208,48 @@ def load_npu_depth(int_path, frac_path, max_depth=15.0):
     return depth
 
 
-def create_custom_colormap(min_depth=0.5, max_depth=15.0):
+def create_custom_colormap(min_depth=0.5, max_depth=15.0, desaturate=False):
     """
     Create custom progressive coarsening colormap
-    근거리: 0.1m 스텝, 중거리: 0.2m 스텝, 원거리: 0.5-1m 스텝
+    
+    Args:
+        min_depth: Minimum depth value (default 0.5m)
+        max_depth: Maximum depth value (default 15.0m)
+        desaturate: If True, make colors more subtle/pastel
     """
-    depth_range = max_depth - min_depth  # 14.5m
+    depth_range = max_depth - min_depth
     
-    colors_positions = [
-        # 0.5m ~ 0.75m: Pure Red
-        ((0.5 - 0.5) / depth_range, (1.0, 0.0, 0.0)),
-        ((0.75 - 0.5) / depth_range, (1.0, 0.0, 0.0)),
-        
-        # 0.75m ~ 3.0m: 0.1m steps (Red → Orange → Yellow)
-        ((0.85 - 0.5) / depth_range, (1.0, 0.1, 0.0)),
-        ((0.95 - 0.5) / depth_range, (1.0, 0.2, 0.0)),
-        ((1.05 - 0.5) / depth_range, (1.0, 0.3, 0.0)),
-        ((1.15 - 0.5) / depth_range, (1.0, 0.4, 0.0)),
-        ((1.25 - 0.5) / depth_range, (1.0, 0.5, 0.0)),
-        ((1.35 - 0.5) / depth_range, (1.0, 0.55, 0.0)),
-        ((1.45 - 0.5) / depth_range, (1.0, 0.6, 0.0)),
-        ((1.55 - 0.5) / depth_range, (1.0, 0.65, 0.0)),
-        ((1.65 - 0.5) / depth_range, (1.0, 0.7, 0.0)),
-        ((1.75 - 0.5) / depth_range, (1.0, 0.75, 0.0)),
-        ((1.85 - 0.5) / depth_range, (1.0, 0.8, 0.0)),
-        ((1.95 - 0.5) / depth_range, (1.0, 0.85, 0.0)),
-        ((2.05 - 0.5) / depth_range, (1.0, 0.88, 0.0)),
-        ((2.15 - 0.5) / depth_range, (1.0, 0.91, 0.0)),
-        ((2.25 - 0.5) / depth_range, (1.0, 0.94, 0.0)),
-        ((2.35 - 0.5) / depth_range, (1.0, 0.97, 0.0)),
-        ((2.45 - 0.5) / depth_range, (1.0, 1.0, 0.0)),
-        ((2.55 - 0.5) / depth_range, (0.97, 1.0, 0.03)),
-        ((2.65 - 0.5) / depth_range, (0.94, 1.0, 0.06)),
-        ((2.75 - 0.5) / depth_range, (0.91, 1.0, 0.09)),
-        ((2.85 - 0.5) / depth_range, (0.88, 1.0, 0.12)),
-        ((2.95 - 0.5) / depth_range, (0.85, 1.0, 0.15)),
-        
-        # 3.0m ~ 6.0m: 0.2m steps (Yellow → Green)
-        ((3.2 - 0.5) / depth_range, (0.8, 1.0, 0.2)),
-        ((3.4 - 0.5) / depth_range, (0.7, 1.0, 0.3)),
-        ((3.6 - 0.5) / depth_range, (0.6, 1.0, 0.4)),
-        ((3.8 - 0.5) / depth_range, (0.5, 1.0, 0.5)),
-        ((4.0 - 0.5) / depth_range, (0.4, 1.0, 0.6)),
-        ((4.2 - 0.5) / depth_range, (0.35, 1.0, 0.65)),
-        ((4.4 - 0.5) / depth_range, (0.3, 1.0, 0.7)),
-        ((4.6 - 0.5) / depth_range, (0.25, 1.0, 0.75)),
-        ((4.8 - 0.5) / depth_range, (0.2, 1.0, 0.8)),
-        ((5.0 - 0.5) / depth_range, (0.15, 1.0, 0.85)),
-        ((5.2 - 0.5) / depth_range, (0.1, 1.0, 0.9)),
-        ((5.4 - 0.5) / depth_range, (0.05, 1.0, 0.95)),
-        ((5.6 - 0.5) / depth_range, (0.0, 1.0, 1.0)),
-        
-        # 6.0m ~ 10.0m: 0.5m steps (Cyan → Blue)
-        ((6.0 - 0.5) / depth_range, (0.0, 0.95, 1.0)),
-        ((6.5 - 0.5) / depth_range, (0.0, 0.9, 1.0)),
-        ((7.0 - 0.5) / depth_range, (0.0, 0.85, 1.0)),
-        ((7.5 - 0.5) / depth_range, (0.0, 0.8, 1.0)),
-        ((8.0 - 0.5) / depth_range, (0.0, 0.7, 1.0)),
-        ((8.5 - 0.5) / depth_range, (0.0, 0.6, 1.0)),
-        ((9.0 - 0.5) / depth_range, (0.0, 0.5, 1.0)),
-        ((9.5 - 0.5) / depth_range, (0.0, 0.4, 1.0)),
-        ((10.0 - 0.5) / depth_range, (0.0, 0.3, 1.0)),
-        
-        # 10.0m ~ 15.0m: 1m steps (Blue)
-        ((11.0 - 0.5) / depth_range, (0.0, 0.2, 1.0)),
-        ((12.0 - 0.5) / depth_range, (0.0, 0.15, 1.0)),
-        ((13.0 - 0.5) / depth_range, (0.0, 0.1, 1.0)),
-        ((14.0 - 0.5) / depth_range, (0.0, 0.05, 1.0)),
-        ((15.0 - 0.5) / depth_range, (0.0, 0.0, 1.0)),
-    ]
+    if desaturate:
+        # More subtle, desaturated colors (pastel-like) for 0.5-15m range
+        depth_points = [
+            (0.5,  (0.8, 0.3, 0.3)),    # Muted Red: very near
+            (1.0,  (0.8, 0.3, 0.3)),    # Muted Red
+            (1.5,  (0.8, 0.5, 0.3)),    # Muted Orange
+            (2.0,  (0.8, 0.8, 0.4)),    # Muted Yellow
+            (3.0,  (0.7, 0.8, 0.5)),    # Muted Yellow-Green
+            (4.0,  (0.5, 0.8, 0.6)),    # Muted Green
+            (5.5,  (0.4, 0.8, 0.7)),    # Muted Cyan-Green
+            (7.0,  (0.4, 0.7, 0.8)),    # Muted Cyan
+            (10.0, (0.4, 0.6, 0.8)),    # Muted Cyan-Blue
+            (15.0, (0.3, 0.4, 0.7)),    # Muted Blue: far
+        ]
+    else:
+        # Original vibrant colors for 0.5-15m range
+        depth_points = [
+            (0.5,  (1.0, 0.0, 0.0)),    # Red: very near
+            (1.0,  (1.0, 0.0, 0.0)),    # Red
+            (1.5,  (1.0, 0.5, 0.0)),    # Orange
+            (2.0,  (1.0, 1.0, 0.0)),    # Yellow
+            (3.0,  (0.8, 1.0, 0.2)),    # Yellow-Green
+            (4.0,  (0.5, 1.0, 0.5)),    # Green
+            (5.5,  (0.0, 1.0, 0.8)),    # Cyan-Green
+            (7.0,  (0.0, 1.0, 1.0)),    # Cyan
+            (10.0, (0.0, 0.5, 1.0)),    # Cyan-Blue
+            (15.0, (0.0, 0.0, 1.0)),    # Blue: far
+        ]
     
-    positions = [p[0] for p in colors_positions]
-    colors = [p[1] for p in colors_positions]
+    positions = [(d - min_depth) / depth_range for d, c in depth_points]
+    colors = [c for d, c in depth_points]
     
     custom_cmap = LinearSegmentedColormap.from_list('depth_custom', 
                                                      list(zip(positions, colors)), 
@@ -267,7 +280,7 @@ def depth_to_colormap_rgb(depth, cmap, min_depth=0.5, max_depth=15.0):
 
 
 def blend_depth_on_rgb(rgb, depth, cmap, valid_mask,
-                       min_depth=0.5, max_depth=15.0, 
+                       min_depth=0.1, max_depth=30.0, 
                        alpha=0.9):
     """
     Blend colormap depth onto RGB using alpha blending
@@ -304,18 +317,16 @@ def blend_depth_on_rgb(rgb, depth, cmap, valid_mask,
 
 
 def draw_depth_points_with_projection(rgb, depth, cmap, valid_mask, marker_size, alpha,
-                                      camera_model, min_depth=0.5, max_depth=15.0):
+                                      camera_model, min_depth=0.1, max_depth=30.0):
     """
     Draw depth points on RGB image using proper 3D projection
     
-    Steps:
-    1. Unproject depth map to 3D points (using camera model inverse)
-    2. Project 3D points back to image (using camera model forward)
-    3. Draw points with depth-based colors
+    GT depth is from LiDAR projection - treat it like LiDAR data!
+    Need to unproject to 3D, then reproject with camera model.
     
     Args:
         rgb: (H, W, 3) numpy array
-        depth: (H, W) depth map
+        depth: (H, W) depth map (from LiDAR projection)
         cmap: matplotlib colormap
         valid_mask: (H, W) boolean mask
         marker_size: size of each point
@@ -342,45 +353,28 @@ def draw_depth_points_with_projection(rgb, depth, cmap, valid_mask, marker_size,
     # Draw each point
     radius = max(1, marker_size // 2)
     
-    projected_count = 0
-    unprojected_count = 0
+    # GT depth는 이미 올바른 픽셀 위치에 projection된 결과이므로
+    # 픽셀 좌표 (u, v)를 직접 사용합니다 (unprojection 불필요!)
     
+    # Fast drawing: create overlay once, draw all points, then blend
+    overlay = result.copy()
     for i in range(len(u_coords)):
-        u_orig = u_coords[i]
-        v_orig = v_coords[i]
-        d = depth_values[i]
-        
-        # Step 1: Unproject pixel + depth to 3D camera coordinate
-        try:
-            Xc, Yc, Zc = camera_model.unproject_pixel_to_camera_coords(u_orig, v_orig, d)
-            unprojected_count += 1
-        except:
-            continue
-        
-        # Step 2: Project 3D point back to image using camera model
-        u_proj, v_proj, valid = camera_model.project_point(Xc, Yc, Zc)
-        
-        if not valid:
-            continue
-        
-        # Validate projection is within image bounds
-        if 0 <= u_proj < W and 0 <= v_proj < H:
-            projected_count += 1
-            color = tuple(int(c) for c in colors_rgb[i])  # RGB order
-            
-            # Draw filled circle with alpha blending
-            overlay = result.copy()
-            cv2.circle(overlay, (u_proj, v_proj), radius, color, -1)
-            cv2.addWeighted(overlay, alpha, result, 1 - alpha, 0, result)
+        u = u_coords[i]
+        v = v_coords[i]
+        color = tuple(int(c) for c in colors_rgb[i])  # RGB order
+        cv2.circle(overlay, (u, v), radius, color, -1)
+    
+    # Single alpha blend at the end
+    cv2.addWeighted(overlay, alpha, result, 1 - alpha, 0, result)
     
     # Debug info
-    print(f"  Unprojected: {unprojected_count}/{len(u_coords)}, Projected: {projected_count}/{unprojected_count}")
+    print(f"  Drew {len(u_coords):,} GT depth points directly at pixel locations")
     
     return result
 
 
 def draw_depth_points_opencv(rgb, depth, cmap, valid_mask, marker_size, alpha,
-                             min_depth=0.5, max_depth=15.0):
+                             min_depth=0.1, max_depth=30.0):
     """
     Draw depth points on RGB image using OpenCV
     
@@ -395,7 +389,7 @@ def draw_depth_points_opencv(rgb, depth, cmap, valid_mask, marker_size, alpha,
     Returns:
         result: (H, W, 3) numpy array with depth points drawn
     """
-    result = rgb.copy()
+    result = rgb.copy().astype(np.float32) / 255.0  # Normalize to [0, 1]
     
     # Get valid depth coordinates and values
     y_coords, x_coords = np.where(valid_mask)
@@ -406,25 +400,22 @@ def draw_depth_points_opencv(rgb, depth, cmap, valid_mask, marker_size, alpha,
     
     # Get colors from colormap
     colors_rgba = cmap(depth_normalized)
-    colors_rgb = (colors_rgba[:, :3] * 255).astype(np.uint8)  # RGB format (0-255)
+    colors_rgb = colors_rgba[:, :3]  # RGB format (0-1)
     
-    # Draw each point
-    radius = max(1, marker_size // 2)
+    # Fast pixel-level blending without circles (much faster)
     for i, (x, y) in enumerate(zip(x_coords, y_coords)):
-        # Keep RGB order (not BGR) since we're using PIL to save
-        color = tuple(int(c) for c in colors_rgb[i])  # RGB order
-        
-        # Draw filled circle with alpha blending
-        overlay = result.copy()
-        cv2.circle(overlay, (x, y), radius, color, -1)
-        cv2.addWeighted(overlay, alpha, result, 1 - alpha, 0, result)
+        if 0 <= x < result.shape[1] and 0 <= y < result.shape[0]:
+            result[y, x] = result[y, x] * (1 - alpha) + colors_rgb[i] * alpha
+    
+    # Convert back to [0, 255]
+    result = (result * 255).astype(np.uint8)
     
     return result
 
 
 def visualize_projection_single(rgb_path, gt_path, npu_int_path, npu_frac_path,
                                 output_path, marker_size=30, alpha=0.9,
-                                min_depth=0.5, max_depth=15.0, use_projection=True):
+                                min_depth=0.5, max_depth=15.0, use_projection=True, desaturate=False):
     """
     Create side-by-side projection visualization using OpenCV
     
@@ -446,8 +437,8 @@ def visualize_projection_single(rgb_path, gt_path, npu_int_path, npu_frac_path,
     # Get valid mask from GT
     valid_mask = gt_depth > 0
     
-    # Create colormap
-    cmap = create_custom_colormap(min_depth, max_depth)
+    # Create colormap (with desaturation option)
+    cmap = create_custom_colormap(min_depth, max_depth, desaturate=desaturate)
     
     # Initialize camera model if using projection
     if use_projection:
@@ -455,6 +446,10 @@ def visualize_projection_single(rgb_path, gt_path, npu_int_path, npu_frac_path,
             DEFAULT_CALIB["intrinsic"],
             DEFAULT_CALIB["image_size"]
         )
+        # Apply scaling (original intrinsic is for 1920x1536, target is 640x384)
+        # scale_x = 640 / 1920 = 1/3, scale_y = 384 / 1536 = 1/4
+        camera_model.scale_intrinsics(scale_x=640/1920, scale_y=384/1536)
+        
         # Draw depth points with proper projection
         left_img = draw_depth_points_with_projection(rgb, gt_depth, cmap, valid_mask, 
                                                      marker_size, alpha, camera_model,
@@ -527,6 +522,81 @@ def visualize_projection_single(rgb_path, gt_path, npu_int_path, npu_frac_path,
     return output_path
 
 
+def create_video_from_images(image_dir, output_video, fps=30):
+    """
+    Create MP4 video from JPG images
+    
+    Args:
+        image_dir: Directory containing _res.jpg files
+        output_video: Output MP4 file path
+        fps: Frames per second (default: 30)
+    
+    Returns:
+        True if successful, False otherwise
+    """
+    image_dir = Path(image_dir)
+    
+    # Get all _res.jpg files sorted by name
+    image_files = sorted([f for f in image_dir.iterdir() if f.name.endswith('_res.jpg')])
+    
+    if not image_files:
+        print(f"❌ No _res.jpg files found in {image_dir}")
+        return False
+    
+    print(f"\n📹 Creating video from {len(image_files)} images...")
+    print(f"   FPS: {fps}")
+    
+    # Read first image to get dimensions
+    first_image = cv2.imread(str(image_files[0]))
+    if first_image is None:
+        print(f"❌ Failed to read first image: {image_files[0]}")
+        return False
+    
+    height, width = first_image.shape[:2]
+    print(f"   Image size: {width}x{height}")
+    
+    # Create video writer
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(str(output_video), fourcc, fps, (width, height))
+    
+    if not out.isOpened():
+        print(f"❌ Failed to create video writer: {output_video}")
+        return False
+    
+    try:
+        # Write frames
+        for idx, image_file in enumerate(image_files):
+            frame = cv2.imread(str(image_file))
+            
+            if frame is None:
+                print(f"⚠️  Failed to read image: {image_file.name}")
+                continue
+            
+            out.write(frame)
+            
+            if (idx + 1) % 100 == 0 or (idx + 1) == len(image_files):
+                print(f"   Written {idx+1}/{len(image_files)} frames...")
+        
+        out.release()
+        
+        # Verify output file
+        if os.path.exists(output_video) and os.path.getsize(output_video) > 0:
+            file_size_mb = os.path.getsize(output_video) / (1024 * 1024)
+            print(f"\n✅ Video created successfully!")
+            print(f"   Output: {output_video}")
+            print(f"   Size: {file_size_mb:.1f} MB")
+            print(f"   Frames: {len(image_files)}")
+            print(f"   Duration: {len(image_files)/fps:.1f} seconds")
+            return True
+        else:
+            print(f"❌ Video file was not created or is empty")
+            return False
+    
+    except Exception as e:
+        print(f"❌ Error creating video: {str(e)}")
+        return False
+
+
 def main():
     parser = argparse.ArgumentParser(description='NCDB Video Projection Visualization')
     parser.add_argument('--rgb_dir', type=str, default='ncdb_video/rgb',
@@ -542,18 +612,26 @@ def main():
                        help='Marker size for scatter points')
     parser.add_argument('--alpha', type=float, default=0.9,
                        help='Alpha for scatter points (0-1, higher=more opaque)')
-    parser.add_argument('--use_projection', action='store_true',
-                       help='Use proper 3D projection with camera model (default: direct pixel mapping)')
+    parser.add_argument('--use_projection', action='store_true', default=True,
+                       help='Use proper 3D projection with camera model (default: True)')
     parser.add_argument('--min_depth', type=float, default=0.5,
-                       help='Minimum depth (m)')
+                       help='Minimum depth (m, default: 0.5)')
     parser.add_argument('--max_depth', type=float, default=15.0,
-                       help='Maximum depth (m)')
+                       help='Maximum depth (m, default: 15.0)')
+    parser.add_argument('--desaturate', action='store_true',
+                       help='Use desaturated (pastel) colors for colormap')
     parser.add_argument('--test', action='store_true',
                        help='Test mode: process single image')
     parser.add_argument('--sample_idx', type=int, default=0,
                        help='Sample index for test mode')
     parser.add_argument('--batch', action='store_true',
                        help='Batch mode: process all images')
+    parser.add_argument('--make-video', action='store_true',
+                       help='Create MP4 video from generated images (use with --batch)')
+    parser.add_argument('--no-infer', action='store_true',
+                       help='Skip inference, only create video from existing images (use with --make-video)')
+    parser.add_argument('--fps', type=int, default=30,
+                       help='FPS for video output (default: 30)')
     
     args = parser.parse_args()
     
@@ -603,7 +681,7 @@ def main():
         try:
             visualize_projection_single(rgb_path, gt_path, npu_int_path, npu_frac_path,
                                        output_path, args.marker_size, args.alpha,
-                                       args.min_depth, args.max_depth, args.use_projection)
+                                       args.min_depth, args.max_depth, args.use_projection, args.desaturate)
             print(f"✅ Test result saved: {output_path}")
         except Exception as e:
             print(f"❌ Error: {str(e)}")
@@ -639,7 +717,7 @@ def main():
             try:
                 visualize_projection_single(rgb_path, gt_path, npu_int_path, npu_frac_path,
                                            output_path, args.marker_size, args.alpha,
-                                           args.min_depth, args.max_depth, args.use_projection)
+                                           args.min_depth, args.max_depth, args.use_projection, args.desaturate)
                 successful += 1
                 
                 if (idx + 1) % 50 == 0 or (idx + 1) == len(rgb_files):
@@ -653,9 +731,52 @@ def main():
         print(f"   Successful: {successful}")
         print(f"   Failed: {failed}")
         print(f"   Output directory: {output_dir}")
+        
+        # Create video if requested
+        if args.make_video:
+            video_filename = f"{output_dir.name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+            output_video = Path(args.output_dir).parent / video_filename
+            create_video_from_images(output_dir, output_video, fps=args.fps)
+    
+    # Make video only mode: create video from existing images without inference
+    elif args.make_video and args.no_infer:
+        print(f"\n📹 Make-video mode (no inference): Creating video from images in {output_dir}...")
+        
+        # Count existing images
+        existing_images = sorted([f for f in output_dir.glob('*_res.jpg')])
+        if not existing_images:
+            print(f"❌ No _res.jpg files found in {output_dir}")
+            return
+        
+        print(f"   Found {len(existing_images)} images")
+        
+        video_filename = f"{output_dir.name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+        output_video = output_dir.parent / video_filename
+        create_video_from_images(output_dir, output_video, fps=args.fps)
+    
+    # Make video mode: create video from existing images
+    elif args.make_video:
+        print(f"\n📹 Make-video mode: Creating video from images in {output_dir}...")
+        
+        # Count existing images
+        existing_images = sorted([f for f in output_dir.glob('*_res.jpg')])
+        if not existing_images:
+            print(f"❌ No _res.jpg files found in {output_dir}")
+            return
+        
+        print(f"   Found {len(existing_images)} images")
+        
+        video_filename = f"{output_dir.name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+        output_video = output_dir.parent / video_filename
+        create_video_from_images(output_dir, output_video, fps=args.fps)
     
     else:
-        print("Please specify --test or --batch mode")
+        print("Please specify --test, --batch, or --make-video mode")
+        print("  Examples:")
+        print("    --test --sample_idx 0              (test single image)")
+        print("    --batch                            (process all images)")
+        print("    --batch --make-video               (batch + create video)")
+        print("    --make-video --no-infer            (video only, skip inference)")
         parser.print_help()
 
 

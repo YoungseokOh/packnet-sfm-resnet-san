@@ -1,7 +1,7 @@
 # ST2 Dual-Head Training Configuration - NCDB 640x384
 # Purpose: Complete ST2 Dual-Head training on NCDB dataset
 # Resolution: 640x384
-# Depth Range: 0.5m - 15.0m (near-field)
+# Depth Range: 0.1m - 15.0m (near-field)
 # Based on: docs/quantization/ST2/Quick_Reference.md
 
 model:
@@ -12,6 +12,11 @@ model:
         supervised_method: 'sparse-ssi-silog'
         supervised_num_scales: 1
         supervised_loss_weight: 1.0
+        # 🆕 SSI-Silog Loss 파라미터 (균형 잡힌 추천 설정)
+        ssi_weight: 0.5               # SSI (상대적 정확도) 가중치
+        silog_weight: 0.5             # Silog (절대적 정확도) 가중치
+        alpha: 0.85                   # SSI mean penalty (bias 제거)
+        silog_ratio2: 0.85            # Silog scale-invariance 계수
     
     # Optimizer configuration
     optimizer:
@@ -52,21 +57,21 @@ datasets:
         dataset: ['ncdb']
         path: ['/workspace/data/ncdb-cls-640x384']
         split: ['splits/combined_train.json']
-        depth_type: ['depth']         # ⭐ 'distance' (3D euclidean) or 'depth' (Z-axis)
+        depth_type: ['distance']      # ⭐ 'distance' (3D euclidean) - for this config
         mask_file: ['binary_mask.png']
         use_mask: [false]
     validation:
         dataset: ['ncdb']
         path: ['/workspace/data/ncdb-cls-640x384']
         split: ['splits/combined_val.json']
-        depth_type: ['depth']         # ⭐ 'distance' or 'depth'
+        depth_type: ['distance']      # ⭐ 'distance' (3D euclidean)
         mask_file: ['binary_mask.png']
         use_mask: [false]
     test:
         dataset: ['ncdb']
         path: ['/workspace/data/ncdb-cls-640x384']
         split: ['splits/combined_test.json']
-        depth_type: ['depth']         # ⭐ 'distance' or 'depth'
+        depth_type: ['distance']      # ⭐ 'distance' (3D euclidean)
         mask_file: ['binary_mask.png']
         use_mask: [false]
 
@@ -89,13 +94,13 @@ arch:
 ############################################
 
 checkpoint:
-    filepath: 'checkpoints/resnetsan01_dual_head_ncdb_original_640x384_0.1_to_15m_UF/'
+    filepath: 'checkpoints/resnetsan_distance_ncdb_640x384_01_to_15m_SSI_Silog_05_05/'
     save_top_k: -1                    # Save all checkpoints (team policy)
     period: 1                         # Save every 2 epochs (disk optimization)
 
 # Save configuration
 save:
-    folder: 'outputs/resnetsan01_dual_head_fixed_ncdb_original_640x384_0.1_to_15m_UF/'
+    folder: 'outputs/resnetsan_distance_ncdb_640x384_01_to_15m_SSI_Silog_05_05/'
 
 # Tensorboard logging
 tensorboard:

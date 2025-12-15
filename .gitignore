@@ -54,6 +54,7 @@ outputs/
 docs_md/
 ncdb-cls-sample/
 KITTI_tiny/
+test_set_v2/
 ref_code/
 sync_tool.py
 camera_lidar_projector.py

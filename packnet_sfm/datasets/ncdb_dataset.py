@@ -36,12 +36,15 @@ class NcdbDataset(Dataset):
     # 🔔 해상도 감지 로그: 프로세스당 한 번만 출력
     _RESOLUTION_LOG_SHOWN = False
 
-    DEFAULT_DEPTH_VARIANTS = [
-        'newest_depth_maps',
-        'newest_synthetic_depth_maps',
-        'new_depth_maps',
-        'depth_maps',
-    ]
+    # ✅ depth_type → 폴더명 매핑
+    DEPTH_TYPE_MAPPING = {
+        'distance': 'newest_distance_maps',           # 카메라 중심에서 3D 유클리드 거리
+        'depth': 'newest_original_depth_maps',        # Z-axis depth (synthetic 없음, 원본)
+        'depth_synthetic': 'newest_depth_maps',       # Z-axis depth (synthetic 포함)
+    }
+    
+    # 기본값: distance (3D 유클리드 거리)
+    DEFAULT_DEPTH_TYPE = 'distance'
 
     # ✅ 공통 PNG 로더: 항상 (미터*256) 규약이면 /256 복원 (default)
     def _load_depth_png(self, depth_path: Path):
@@ -65,11 +68,13 @@ class NcdbDataset(Dataset):
     def __init__(self, dataset_root, split_file, transform=None, mask_file=None,
                  back_context=0, forward_context=0, strides=(1,), 
                  with_context=False, with_depth=True,
-                 depth_variants=None,    # str | list | None
-                 strict_depth=False,     # True면 어떤 variant도 없으면 예외
+                 depth_type=None,        # ✅ 'distance', 'depth', or 'depth_synthetic' (config에서 설정)
+                 depth_variants=None,    # str | list | None (하위호환용, depth_type 우선)
+                 strict_depth=True,      # ⚠️ 기본 True: depth 파일 없으면 예외 발생
                  use_mask: bool = False, # ← 추가: 마스크 사용 여부 (기본 미사용)
                  min_depth: float = None,  # ← GT depth 필터링 최소값
                  max_depth: float = None,  # ← GT depth 필터링 최대값
+                 dry_run: bool = False,  # ✅ dry-run 모드: 폴더 존재 여부 검증만 수행
                  **kwargs):
         super().__init__()
         
@@ -90,20 +95,45 @@ class NcdbDataset(Dataset):
         self.strides = strides
         self.with_context = with_context or (back_context > 0 or forward_context > 0)
         self.with_depth = with_depth
-        # Depth variant 설정
+        
+        # ✅ depth_type 처리 (config에서 설정 가능)
+        # 우선순위: depth_type > 환경변수 > depth_variants > 기본값
+        env_depth_type = os.getenv('NCDB_DEPTH_TYPE', '').strip().lower()
         env_variant = os.getenv('NCDB_DEPTH_VARIANT', '').strip()
-        if env_variant:
-            # 콤마 구분 다중 허용
-            depth_variants = [v.strip() for v in env_variant.split(',') if v.strip()]
-        if depth_variants is None:
-            self.depth_variants = self.DEFAULT_DEPTH_VARIANTS.copy()
-        elif isinstance(depth_variants, str):
-            self.depth_variants = [depth_variants]
+        
+        if depth_type is not None:
+            # config에서 depth_type 지정
+            depth_type = depth_type.lower()
+            if depth_type not in self.DEPTH_TYPE_MAPPING:
+                raise ValueError(f"[NcdbDataset] Invalid depth_type: '{depth_type}'. "
+                               f"Valid options: {list(self.DEPTH_TYPE_MAPPING.keys())}")
+            self.depth_type = depth_type
+            self.depth_variants = [self.DEPTH_TYPE_MAPPING[depth_type]]
+        elif env_depth_type:
+            # 환경변수에서 depth_type 지정
+            if env_depth_type not in self.DEPTH_TYPE_MAPPING:
+                raise ValueError(f"[NcdbDataset] Invalid NCDB_DEPTH_TYPE: '{env_depth_type}'. "
+                               f"Valid options: {list(self.DEPTH_TYPE_MAPPING.keys())}")
+            self.depth_type = env_depth_type
+            self.depth_variants = [self.DEPTH_TYPE_MAPPING[env_depth_type]]
+        elif env_variant:
+            # 환경변수에서 직접 폴더명 지정 (하위호환)
+            self.depth_type = None
+            self.depth_variants = [v.strip() for v in env_variant.split(',') if v.strip()]
+        elif depth_variants is not None:
+            # depth_variants 직접 지정 (하위호환)
+            self.depth_type = None
+            if isinstance(depth_variants, str):
+                self.depth_variants = [depth_variants]
+            else:
+                self.depth_variants = list(depth_variants)
         else:
-            self.depth_variants = list(depth_variants)
-        if not self.depth_variants:
-            self.depth_variants = self.DEFAULT_DEPTH_VARIANTS.copy()
+            # 기본값 사용
+            self.depth_type = self.DEFAULT_DEPTH_TYPE
+            self.depth_variants = [self.DEPTH_TYPE_MAPPING[self.DEFAULT_DEPTH_TYPE]]
+        
         self.strict_depth = strict_depth
+        
         # 중복 제거 (앞쪽 우선순위 유지)
         seen = set()
         ordered = []
@@ -112,11 +142,15 @@ class NcdbDataset(Dataset):
                 ordered.append(v)
                 seen.add(v)
         self.depth_variants = ordered
-        if os.environ.get('DEPTH_VARIANT_DEBUG','0') == '1':
-            print(f"[NcdbDataset] Depth variants order: {self.depth_variants}")
         
-        # (추가) 선택된 depth variant 목록 출력 (주석 번갈아가며 바꿀 필요 없이 확인용)
-        print(f"[NcdbDataset] Using depth variants (priority order): {self.depth_variants}")
+        # ✅ 명확한 로그 출력
+        if self.depth_type:
+            print(f"[NcdbDataset] 📊 depth_type='{self.depth_type}' → folder: {self.depth_variants[0]}")
+        else:
+            print(f"[NcdbDataset] Using depth variants (priority order): {self.depth_variants}")
+        
+        # ✅ dry_run 모드 저장
+        self.dry_run = dry_run
         
         # Context path storage
         self.backward_context_paths = []
@@ -128,6 +162,11 @@ class NcdbDataset(Dataset):
         
         # Load split file
         self._load_split_file(split_file)
+        
+        # ✅ dry-run 모드: 폴더 및 파일 존재 여부 검증
+        if dry_run:
+            self._validate_depth_folders()
+            return  # dry-run 모드에서는 여기서 종료
         
         # Load mask if provided (0/1 binary), but apply only when use_mask=True
         self.mask = None
@@ -190,6 +229,117 @@ class NcdbDataset(Dataset):
         
         self.data_entries = normalized
         print(f"Loaded {len(self.data_entries)} entries from {absolute_split_path} (converted {converted} from image_path)")
+    
+    def _validate_depth_folders(self):
+        """
+        ✅ Dry-run validation: 폴더 존재 여부 및 파일 매칭 검증
+        """
+        print(f"\n{'='*60}")
+        print(f"🔍 DRY-RUN VALIDATION")
+        print(f"{'='*60}")
+        print(f"Dataset root: {self.dataset_root}")
+        print(f"Depth type: {self.depth_type}")
+        print(f"Target folder: {self.depth_variants[0]}")
+        print(f"Total entries: {len(self.data_entries)}")
+        print(f"{'='*60}\n")
+        
+        # 1. 고유한 dataset_root 경로들 수집
+        unique_roots = set(entry['dataset_root'] for entry in self.data_entries)
+        print(f"📂 Unique dataset roots: {len(unique_roots)}")
+        
+        # 2. 각 root에서 depth 폴더 존재 여부 확인
+        folder_status = {}
+        for root in sorted(unique_roots):
+            base_path = self.dataset_root / root
+            depth_folder = base_path / self.depth_variants[0]
+            
+            if depth_folder.exists():
+                # 폴더 내 파일 수 확인
+                png_files = list(depth_folder.glob('*.png'))
+                folder_status[root] = {
+                    'exists': True,
+                    'file_count': len(png_files),
+                    'path': str(depth_folder)
+                }
+            else:
+                folder_status[root] = {
+                    'exists': False,
+                    'file_count': 0,
+                    'path': str(depth_folder)
+                }
+        
+        # 3. 결과 출력
+        exists_count = sum(1 for s in folder_status.values() if s['exists'])
+        missing_count = len(folder_status) - exists_count
+        
+        print(f"\n📊 Folder Status:")
+        print(f"   ✅ Found: {exists_count}/{len(folder_status)}")
+        print(f"   ❌ Missing: {missing_count}/{len(folder_status)}")
+        
+        if missing_count > 0:
+            print(f"\n⚠️  Missing folders:")
+            for root, status in folder_status.items():
+                if not status['exists']:
+                    print(f"   ❌ {status['path']}")
+        
+        # 4. 샘플 단위 파일 매칭 검증 (처음 10개 + 랜덤 10개)
+        print(f"\n📁 Sample file validation (first 10 entries):")
+        matched = 0
+        missing_files = []
+        
+        check_entries = self.data_entries[:min(10, len(self.data_entries))]
+        for entry in check_entries:
+            stem = entry['new_filename']
+            depth_path = self.dataset_root / entry['dataset_root'] / self.depth_variants[0] / f"{stem}.png"
+            rgb_path = self.dataset_root / entry['dataset_root'] / 'image_a6' / f"{stem}.png"
+            if not rgb_path.exists():
+                rgb_path = self.dataset_root / entry['dataset_root'] / 'image_a6' / f"{stem}.jpg"
+            
+            rgb_ok = rgb_path.exists()
+            depth_ok = depth_path.exists()
+            
+            if rgb_ok and depth_ok:
+                matched += 1
+                status = "✅"
+            else:
+                status = "❌"
+                missing_files.append({
+                    'stem': stem,
+                    'rgb': str(rgb_path) if not rgb_ok else None,
+                    'depth': str(depth_path) if not depth_ok else None
+                })
+            
+            print(f"   {status} {stem}: RGB={'✓' if rgb_ok else '✗'}, Depth={'✓' if depth_ok else '✗'}")
+        
+        # 5. 전체 파일 매칭률 계산 (샘플링)
+        import random
+        sample_size = min(100, len(self.data_entries))
+        sample_entries = random.sample(self.data_entries, sample_size)
+        
+        total_matched = 0
+        for entry in sample_entries:
+            stem = entry['new_filename']
+            depth_path = self.dataset_root / entry['dataset_root'] / self.depth_variants[0] / f"{stem}.png"
+            if depth_path.exists():
+                total_matched += 1
+        
+        match_rate = (total_matched / sample_size) * 100
+        
+        print(f"\n📈 Estimated match rate (sampled {sample_size} entries):")
+        print(f"   Depth files found: {total_matched}/{sample_size} ({match_rate:.1f}%)")
+        
+        # 6. 최종 요약
+        print(f"\n{'='*60}")
+        if missing_count == 0 and match_rate >= 95:
+            print(f"✅ VALIDATION PASSED")
+            print(f"   depth_type='{self.depth_type}' → '{self.depth_variants[0]}'")
+        else:
+            print(f"⚠️  VALIDATION WARNING")
+            if missing_count > 0:
+                print(f"   - {missing_count} depth folders missing")
+            if match_rate < 95:
+                print(f"   - Low match rate: {match_rate:.1f}%")
+        print(f"{'='*60}\n")
     
     def _filter_paths_with_context(self):
         """Filter paths that have valid context frames (KITTI style)"""
@@ -261,6 +411,8 @@ class NcdbDataset(Dataset):
          stem = entry['new_filename']
          image_path = self.dataset_root / entry['dataset_root'] / 'image_a6' / f"{stem}.png"
          if not image_path.exists():
+             image_path = self.dataset_root / entry['dataset_root'] / 'image_a6' / f"{stem}.jpg"
+         if not image_path.exists():
              self._file_cache[idx] = False
              return False
          if self.with_depth:
@@ -280,16 +432,22 @@ class NcdbDataset(Dataset):
         entry = self.data_entries[idx]
         stem = entry['new_filename']
         
-        # Construct paths
+        # Construct paths (try .png first, fallback to .jpg)
         image_path = self.dataset_root / entry['dataset_root'] / 'image_a6' / f"{stem}.png"
+        if not image_path.exists():
+            image_path = self.dataset_root / entry['dataset_root'] / 'image_a6' / f"{stem}.jpg"
         
         depth_path = None
         depth_variant = None
         if self.with_depth:
             depth_path, depth_variant = self._resolve_depth_path(entry, stem)
             if depth_path is None and self.strict_depth:
+                base_path = self.dataset_root / entry['dataset_root']
                 raise FileNotFoundError(
-                    f"No depth file found for {stem} in variants {self.depth_variants}")
+                    f"❌ [STRICT] Depth file not found!\n"
+                    f"   Sample: {stem}\n"
+                    f"   Expected: {base_path / self.depth_variants[0] / f'{stem}.png'}\n"
+                    f"   Variants tried: {self.depth_variants}")
         
         # Load image
         image = load_image(str(image_path))
@@ -484,6 +642,8 @@ class NcdbDataset(Dataset):
             if not stem:
                 continue
             img_path = self.dataset_root / entry['dataset_root'] / 'image_a6' / f"{stem}.png"
+            if not img_path.exists():
+                img_path = self.dataset_root / entry['dataset_root'] / 'image_a6' / f"{stem}.jpg"
             if not img_path.exists():
                 continue
             try:
