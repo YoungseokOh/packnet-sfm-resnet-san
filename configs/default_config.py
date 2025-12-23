@@ -53,6 +53,9 @@ cfg.model.loss.alpha_ssi = 0.85                # Alpha parameter for SSI loss (f
 cfg.model.loss.beta_silog = 0.15               # Beta parameter for Silog loss (for adaptive multi-domain)
 cfg.model.loss.min_depth = 0.05                # Minimum depth for clamping (for adaptive multi-domain)
 cfg.model.loss.max_depth = 100.0               # Maximum depth for clamping (for adaptive multi-domain)
+# 🆕 Gradient Loss parameters (Multi-Scale Edge Preservation)
+cfg.model.loss.gradient_weight = 0.0           # Gradient loss weight (0.0 = disabled for backward compatibility)
+cfg.model.loss.gradient_scales = 4             # Number of scales for multi-scale gradient loss (1, 1/2, 1/4, 1/8)
 # 🆕 Fixed Multi-Domain Loss parameters (Phase 1)
 cfg.model.loss.w_structure = 0.4               # Structure (gradient) loss weight in fixed multi-domain loss
 cfg.model.loss.w_scale = 0.6                   # Scale (absolute depth) loss weight in fixed multi-domain loss

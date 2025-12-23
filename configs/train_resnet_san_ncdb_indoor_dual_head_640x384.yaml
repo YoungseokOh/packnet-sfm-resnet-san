@@ -12,11 +12,9 @@ model:
         supervised_method: 'sparse-ssi-silog'
         supervised_num_scales: 1
         supervised_loss_weight: 1.0
-        # 🆕 SSI-Silog + Gradient Loss weights
-        ssi_weight: 0.4             # SSI loss component (balanced)
-        silog_weight: 0.4           # Silog loss component (balanced)
-        gradient_weight: 0.2        # 🆕 Gradient loss for edge preservation
-        gradient_scales: 4          # 🆕 Multi-scale: 1, 1/2, 1/4, 1/8
+        # SSI-Silog weights
+        ssi_weight: 0.5             # SSI loss component (balanced)
+        silog_weight: 0.5           # Silog loss component (balanced)
     
     # Optimizer configuration
     optimizer:
@@ -44,7 +42,7 @@ model:
     params:
         crop: ''
         min_depth: 0.1                # ⭐ NCDB near-field minimum
-        max_depth: 15.0               # ⭐ NCDB near-field maximum
+        max_depth: 10.0               # ⭐ NCDB near-field maximum
         scale_output: 'top-center'
         use_log_space: false
 
@@ -55,23 +53,23 @@ datasets:
     train:
         batch_size: 12
         dataset: ['ncdb']
-        path: ['/workspace/data/ncdb-cls-640x384']
-        split: ['splits/combined_train.json']
-        depth_type: ['depth']         # ⭐ 'distance' (3D euclidean) or 'depth' (Z-axis)
+        path: ['/workspace/data/ncdb-cls-indoor']
+        split: ['/workspace/data/ncdb-cls-indoor/splits_indoor_combined/combined_train.json']
+        depth_type: ['depth']
         mask_file: ['binary_mask.png']
         use_mask: [false]
     validation:
         dataset: ['ncdb']
-        path: ['/workspace/data/ncdb-cls-640x384']
-        split: ['splits/combined_val.json']
-        depth_type: ['depth']         # ⭐ 'distance' or 'depth'
+        path: ['/workspace/data/ncdb-cls-indoor']
+        split: ['/workspace/data/ncdb-cls-indoor/splits_indoor_combined/combined_val.json']
+        depth_type: ['depth']
         mask_file: ['binary_mask.png']
         use_mask: [false]
     test:
         dataset: ['ncdb']
-        path: ['/workspace/data/ncdb-cls-640x384']
-        split: ['splits/combined_test.json']
-        depth_type: ['depth']         # ⭐ 'distance' or 'depth'
+        path: ['/workspace/data/ncdb-cls-indoor']
+        split: ['/workspace/data/ncdb-cls-indoor/splits_indoor_combined/combined_test.json']
+        depth_type: ['depth']
         mask_file: ['binary_mask.png']
         use_mask: [false]
 
@@ -94,13 +92,13 @@ arch:
 ############################################
 
 checkpoint:
-    filepath: 'checkpoints/resnetsan01_dual_head_ncdb_original_640x384_0.1_to_15m_Gradient Loss/'
+    filepath: 'checkpoints/resnetsan01_dual_head_ncdb_indoor_640x384_0.1_to_10m/'
     save_top_k: -1                    # Save all checkpoints (team policy)
     period: 1                         # Save every 2 epochs (disk optimization)
 
 # Save configuration
 save:
-    folder: 'outputs/resnetsan01_dual_head_fixed_ncdb_original_640x384_0.1_to_15m_Gradient Loss/'
+    folder: 'outputs/resnetsan01_dual_head_fixed_ncdb_indoor_640x384_0.1_to_10m/'
 
 # Tensorboard logging
 tensorboard:

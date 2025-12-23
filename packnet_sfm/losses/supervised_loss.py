@@ -101,6 +101,8 @@ def get_loss_func(supervised_method, **kwargs):
             alpha=kwargs.get('alpha', 0.85),
             silog_ratio=kwargs.get('silog_ratio', 10),
             silog_ratio2=kwargs.get('silog_ratio2', 0.85),
+            gradient_weight=kwargs.get('gradient_weight', 0.0),  # 🆕 Gradient Loss
+            gradient_scales=kwargs.get('gradient_scales', 4),     # 🆕 Gradient scales
         )
     # elif supervised_method.endswith('ssi-silog-nearfield'):
     #     # 🆕 SSI-Silog with Optional Near-Field Weighting

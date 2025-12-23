@@ -3,17 +3,59 @@
 import os
 import torch
 import torch.nn as nn
-from typing import Optional
+import torch.nn.functional as F
+from typing import Optional, Tuple
 from packnet_sfm.utils.depth import inv2depth
 from packnet_sfm.losses.loss_base import LossBase
 
 
+class Gradient2D(nn.Module):
+    """
+    Sobel filter 기반 2D gradient 계산
+    
+    Sobel X:          Sobel Y:
+    [-1, 0, 1]       [-1, -2, -1]
+    [-2, 0, 2]       [ 0,  0,  0]
+    [-1, 0, 1]       [ 1,  2,  1]
+    
+    Reference: G2-MonoDepth (Gradient2D class)
+    """
+    def __init__(self):
+        super().__init__()
+        kernel_x = torch.tensor([
+            [-1., 0., 1.],
+            [-2., 0., 2.],
+            [-1., 0., 1.]
+        ]).view(1, 1, 3, 3)
+        kernel_y = torch.tensor([
+            [-1., -2., -1.],
+            [ 0.,  0.,  0.],
+            [ 1.,  2.,  1.]
+        ]).view(1, 1, 3, 3)
+        
+        # Non-learnable parameters (자동 device 이동)
+        self.register_buffer('weight_x', kernel_x)
+        self.register_buffer('weight_y', kernel_y)
+    
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Args:
+            x: [B, 1, H, W] depth map
+        Returns:
+            grad_x: [B, 1, H-2, W-2] horizontal gradient
+            grad_y: [B, 1, H-2, W-2] vertical gradient
+        """
+        grad_x = F.conv2d(x, self.weight_x, padding=0)
+        grad_y = F.conv2d(x, self.weight_y, padding=0)
+        return grad_x, grad_y
+
+
 class SSISilogLoss(LossBase):
     """
-    🆕 Scale-Shift-Invariant + Silog combined loss
+    🆕 Scale-Shift-Invariant + Silog + Gradient combined loss
     
     Combines SSI loss (for relative accuracy) with Silog loss (for log-scale accuracy)
-    to maintain scale-shift invariance while improving absolute depth accuracy.
+    and Multi-Scale Gradient loss (for edge preservation).
     
     Parameters
     ----------
@@ -27,9 +69,14 @@ class SSISilogLoss(LossBase):
         Weight for SSI component (default: 0.7)
     silog_weight : float
         Weight for Silog component (default: 0.3)
+    gradient_weight : float
+        Weight for Gradient component (default: 0.0, disabled)
+    gradient_scales : int
+        Number of scales for multi-scale gradient (default: 4)
     """
     def __init__(self, alpha=0.85, silog_ratio=10, silog_ratio2=0.85, 
                  ssi_weight=0.7, silog_weight=0.3,
+                 gradient_weight=0.0, gradient_scales=4,
                 #  ssi_weight=1.0, silog_weight=0.0,
                  min_depth: Optional[float] = None, max_depth: Optional[float] = None):
         super().__init__()
@@ -38,13 +85,24 @@ class SSISilogLoss(LossBase):
         self.silog_ratio2 = silog_ratio2
         self.ssi_weight = ssi_weight
         self.silog_weight = silog_weight
+        # 🆕 Gradient Loss 파라미터
+        self.gradient_weight = gradient_weight
+        self.gradient_scales = gradient_scales
         # Optional clamp range sourced from YAML; if None, fall back to safe defaults
         self.min_depth = min_depth
         self.max_depth = max_depth
         
+        # 🆕 Gradient 계산기 초기화 (weight > 0일 때만)
+        self.gradient_fn = None
+        if gradient_weight > 0:
+            self.gradient_fn = Gradient2D()
+        
         print(f"🎯 SSI-Silog Loss initialized:")
         print(f"   SSI weight: {ssi_weight}")
         print(f"   Silog weight: {silog_weight}")
+        print(f"   Gradient weight: {gradient_weight}")
+        if gradient_weight > 0:
+            print(f"   Gradient scales: {gradient_scales}")
         print(f"   Alpha: {alpha}")
         print(f"   Silog ratio: {silog_ratio}")
         if (self.min_depth is not None) or (self.max_depth is not None):
@@ -54,6 +112,67 @@ class SSISilogLoss(LossBase):
         """Optionally set depth clamp range after construction."""
         self.min_depth = float(min_depth)
         self.max_depth = float(max_depth)
+
+    def compute_gradient_loss(self, pred_depth, gt_depth, mask):
+        """
+        Multi-scale gradient loss 계산
+        
+        Edge 보존을 위해 예측과 GT depth map 간의 gradient 차이를 계산.
+        여러 스케일에서 계산하여 다양한 크기의 edge를 포착.
+        
+        Args:
+            pred_depth: [B, 1, H, W] 예측 depth
+            gt_depth: [B, 1, H, W] GT depth
+            mask: [B, 1, H, W] 유효 픽셀 마스크
+        
+        Returns:
+            loss: scalar gradient loss
+            
+        Reference: G2-MonoDepth WeightedMSGradLoss
+        """
+        if self.gradient_weight <= 0 or self.gradient_fn is None:
+            return torch.tensor(0.0, device=pred_depth.device, requires_grad=False)
+        
+        total_loss = 0.0
+        valid_scales = 0
+        
+        for scale_idx in range(self.gradient_scales):
+            scale_factor = 1.0 / (2 ** scale_idx)
+            
+            if scale_idx == 0:
+                pred_s = pred_depth
+                gt_s = gt_depth
+                mask_s = mask
+            else:
+                pred_s = F.interpolate(pred_depth, scale_factor=scale_factor, 
+                                       mode='bilinear', align_corners=False)
+                gt_s = F.interpolate(gt_depth, scale_factor=scale_factor,
+                                     mode='bilinear', align_corners=False)
+                mask_s = F.interpolate(mask.float(), scale_factor=scale_factor,
+                                       mode='nearest') > 0.5
+            
+            # 최소 크기 체크 (Sobel 적용을 위해 최소 3x3 필요)
+            if pred_s.shape[2] < 3 or pred_s.shape[3] < 3:
+                continue
+            
+            # Gradient 계산
+            grad_pred_x, grad_pred_y = self.gradient_fn(pred_s)
+            grad_gt_x, grad_gt_y = self.gradient_fn(gt_s)
+            
+            # Mask resize (gradient output is H-2, W-2)
+            mask_grad = mask_s[:, :, 1:-1, 1:-1]
+            
+            # L1 loss on gradients
+            if mask_grad.sum() > 0:
+                loss_x = torch.abs(grad_pred_x - grad_gt_x)[mask_grad].mean()
+                loss_y = torch.abs(grad_pred_y - grad_gt_y)[mask_grad].mean()
+                total_loss += (loss_x + loss_y)
+                valid_scales += 1
+        
+        if valid_scales > 0:
+            return total_loss / valid_scales
+        else:
+            return torch.tensor(0.0, device=pred_depth.device, requires_grad=False)
 
     def compute_ssi_loss_inv(self, pred_inv_depth, gt_inv_depth, mask):
         """Compute SSI loss in inverse depth domain (original PackNet approach)"""
@@ -261,7 +380,7 @@ class SSISilogLoss(LossBase):
         Returns
         -------
         loss : torch.Tensor
-            Combined SSI + Silog loss
+            Combined SSI + Silog + Gradient loss
         """
         # ✅ SSI Loss: Compute in inverse depth domain (better for far objects)
         ssi_loss = self.compute_ssi_loss_inv(pred_inv_depth, gt_inv_depth, mask)
@@ -274,6 +393,9 @@ class SSISilogLoss(LossBase):
             mask = (gt_depth > 0)
         
         silog_loss = self.compute_silog_loss(pred_depth, gt_depth, mask)
+        
+        # 🆕 Gradient Loss: Edge preservation (depth domain)
+        gradient_loss = self.compute_gradient_loss(pred_depth, gt_depth, mask)
         
         # 유효 픽셀 수 확인
         valid_pixels = mask.sum()
@@ -288,13 +410,21 @@ class SSISilogLoss(LossBase):
         if torch.isnan(ssi_loss) or torch.isnan(silog_loss):
             return torch.tensor(1.0, device=pred_depth.device, requires_grad=True)
         
-        # 결합된 손실
-        total_loss = self.ssi_weight * ssi_loss + self.silog_weight * silog_loss
+        # 🆕 Gradient NaN 체크
+        if torch.isnan(gradient_loss):
+            gradient_loss = torch.tensor(0.0, device=pred_depth.device, requires_grad=False)
+        
+        # 결합된 손실 (🆕 gradient 추가)
+        total_loss = (self.ssi_weight * ssi_loss + 
+                      self.silog_weight * silog_loss + 
+                      self.gradient_weight * gradient_loss)
         
         # 메트릭 저장
         self.add_metric('ssi_component', ssi_loss)
         self.add_metric('silog_component', silog_loss)
+        self.add_metric('gradient_component', gradient_loss)  # 🆕
         self.add_metric('ssi_weight_used', self.ssi_weight)
         self.add_metric('silog_weight_used', self.silog_weight)
+        self.add_metric('gradient_weight_used', self.gradient_weight)  # 🆕
         
         return total_loss

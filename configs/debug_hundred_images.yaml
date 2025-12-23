@@ -1,0 +1,83 @@
+# Debug config: 100장 학습, 100장 평가
+# Purpose: Training vs eval.py 차이 원인 분석
+
+model:
+    name: 'SemiSupCompletionModel'
+    
+    loss:
+        supervised_method: 'sparse-ssi-silog'
+        supervised_num_scales: 1
+        supervised_loss_weight: 1.0
+        ssi_weight: 0.5
+        silog_weight: 0.5
+    
+    optimizer:
+        name: 'Adam'
+        depth:
+            lr: 0.0002
+        pose:
+            lr: 0.0001
+    
+    scheduler:
+        name: 'StepLR'
+        step_size: 30
+        gamma: 0.5
+    
+    depth_net:
+        name: 'ResNetSAN01'
+        version: '18A'
+        use_dual_head: true
+        use_film: True
+        use_enhanced_lidar: false
+    
+    params:
+        crop: ''
+        min_depth: 0.1
+        max_depth: 10.0
+        scale_output: 'top-center'
+        use_log_space: false
+
+datasets:
+    augmentation:
+        image_shape: [384, 640]
+    train:
+        batch_size: 1
+        dataset: ['ncdb']
+        path: ['/workspace/data/ncdb-cls-indoor']
+        split: ['/tmp/hundred_train.json']
+        depth_type: ['depth']
+        mask_file: ['binary_mask.png']
+        use_mask: [false]
+    validation:
+        dataset: ['ncdb']
+        path: ['/workspace/data/ncdb-cls-indoor']
+        split: ['/tmp/hundred_val.json']
+        depth_type: ['depth']
+        mask_file: ['binary_mask.png']
+        use_mask: [false]
+    test:
+        dataset: ['ncdb']
+        path: ['/workspace/data/ncdb-cls-indoor']
+        split: ['/tmp/hundred_val.json']
+        depth_type: ['depth']
+        mask_file: ['binary_mask.png']
+        use_mask: [false]
+
+arch:
+    seed: 42
+    clip_grad: 1.0
+    max_epochs: 1
+    eval_during_training: true
+    eval_progress_interval: 1.0
+    eval_subset_size: 100
+
+checkpoint:
+    filepath: 'checkpoints/debug_hundred_images/'
+    save_top_k: -1
+    period: 1
+
+save:
+    depth:
+        rgb: false
+        viz: false
+        npz: false

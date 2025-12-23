@@ -44,7 +44,7 @@ model:
     params:
         crop: ''
         min_depth: 0.1                # ⭐ NCDB near-field minimum
-        max_depth: 15.0               # ⭐ NCDB near-field maximum
+        max_depth: 30.0               # ⭐ NCDB near-field maximum
         scale_output: 'top-center'
         use_log_space: false
 
@@ -94,13 +94,13 @@ arch:
 ############################################
 
 checkpoint:
-    filepath: 'checkpoints/resnetsan_distance_ncdb_640x384_01_to_15m_SSI_Silog_05_05/'
+    filepath: 'checkpoints/resnetsan_distance_ncdb_640x384_01_to_30m_SSI_Silog_05_05/'
     save_top_k: -1                    # Save all checkpoints (team policy)
     period: 1                         # Save every 2 epochs (disk optimization)
 
 # Save configuration
 save:
-    folder: 'outputs/resnetsan_distance_ncdb_640x384_01_to_15m_SSI_Silog_05_05/'
+    folder: 'outputs/resnetsan_distance_ncdb_640x384_01_to_30m_SSI_Silog_05_05/'
 
 # Tensorboard logging
 tensorboard:

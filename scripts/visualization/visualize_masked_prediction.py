@@ -11,7 +11,6 @@ import numpy as np
 import cv2
 import torch
 import matplotlib.pyplot as plt
-from matplotlib.colors import LinearSegmentedColormap
 from tqdm import tqdm
 import random
 
@@ -21,71 +20,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from packnet_sfm.utils.config import parse_test_file
 from packnet_sfm.models.model_wrapper import ModelWrapper
 
+from packnet_sfm.visualization.colormaps import create_custom_depth_colormap
+
 
 def create_custom_colormap(min_depth=0.1, max_depth=15.0):
-    """
-    Create custom progressive colormap (red=near, blue=far)
-    Smooth transitions between colors at specified depth ranges.
-    
-    Color ranges:
-    - 0.1 ~ 0.5m:  Red
-    - 0.5 ~ 1.25m: Orange  
-    - 1.25 ~ 2.5m: Yellow
-    - 2.5 ~ 3.5m:  Green
-    - 3.5 ~ 7m:    Cyan
-    - 7 ~ 15m:     Blue
-    """
-    depth_range = max_depth - min_depth
-    
-    # Smooth gradient with transition zones
-    depth_points = [
-        # Red zone (0.1 ~ 0.5m)
-        (0.1,  (1.0, 0.0, 0.0)),    # Pure red
-        (0.3,  (1.0, 0.0, 0.0)),    # Red
-        # Red -> Orange transition (0.4 ~ 0.6m)
-        (0.4,  (1.0, 0.15, 0.0)),   # Red-orange
-        (0.5,  (1.0, 0.35, 0.0)),   # Orange-red
-        # Orange zone (0.5 ~ 1.25m)
-        (0.6,  (1.0, 0.5, 0.0)),    # Orange
-        (0.8,  (1.0, 0.55, 0.0)),   # Orange
-        (1.0,  (1.0, 0.6, 0.0)),    # Orange
-        # Orange -> Yellow transition (1.0 ~ 1.5m)
-        (1.1,  (1.0, 0.7, 0.0)),    # Orange-yellow
-        (1.25, (1.0, 0.85, 0.0)),   # Yellow-orange
-        # Yellow zone (1.25 ~ 2.5m)
-        (1.4,  (1.0, 1.0, 0.0)),    # Pure yellow
-        (1.8,  (1.0, 1.0, 0.0)),    # Yellow
-        (2.2,  (0.9, 1.0, 0.0)),    # Yellow
-        # Yellow -> Green transition (2.3 ~ 2.7m)
-        (2.4,  (0.7, 1.0, 0.1)),    # Yellow-green
-        (2.5,  (0.5, 1.0, 0.2)),    # Green-yellow
-        # Green zone (2.5 ~ 3.5m)
-        (2.7,  (0.3, 1.0, 0.3)),    # Green
-        (3.0,  (0.1, 1.0, 0.4)),    # Green
-        (3.3,  (0.0, 1.0, 0.5)),    # Green-cyan
-        # Green -> Cyan transition (3.3 ~ 3.7m)
-        (3.5,  (0.0, 1.0, 0.7)),    # Cyan-green
-        # Cyan zone (3.5 ~ 7m)
-        (3.8,  (0.0, 1.0, 0.85)),   # Cyan
-        (4.5,  (0.0, 1.0, 1.0)),    # Pure cyan
-        (5.5,  (0.0, 0.9, 1.0)),    # Cyan
-        (6.5,  (0.0, 0.7, 1.0)),    # Cyan-blue
-        # Cyan -> Blue transition (6.5 ~ 7.5m)
-        (7.0,  (0.0, 0.5, 1.0)),    # Blue-cyan
-        # Blue zone (7 ~ 15m)
-        (8.0,  (0.0, 0.3, 1.0)),    # Blue
-        (10.0, (0.0, 0.15, 1.0)),   # Blue
-        (12.0, (0.0, 0.05, 1.0)),   # Deep blue
-        (15.0, (0.0, 0.0, 1.0)),    # Pure blue
-    ]
-    
-    positions = [(d - min_depth) / depth_range for d, c in depth_points]
-    colors = [c for d, c in depth_points]
-    
-    custom_cmap = LinearSegmentedColormap.from_list('depth_custom', 
-                                                     list(zip(positions, colors)), 
-                                                     N=512)
-    return custom_cmap
+    """Backward-compatible wrapper (kept for scripts/args semantics)."""
+    return create_custom_depth_colormap(min_depth, max_depth)
 
 
 def load_model(checkpoint_path: str):
@@ -250,16 +190,35 @@ def visualize_with_mask(
 
 
 def find_sample_pairs(image_dir: Path, depth_subdir: str = 'newest_original_depth_maps'):
-    """Find RGB-Depth pairs"""
+    """Find RGB-Depth pairs.
+
+    This script primarily visualizes *predictions* with a mask.
+    Historically it expected an NCDB dataset folder layout containing:
+      - image_a6/*.jpg
+      - <depth_subdir>/*.png
+
+    For convenience, if GT depth isn't present (e.g., test_set only has images),
+    we still return RGB files with a placeholder depth path. The caller doesn't
+    use GT depth for inference, but keeping the interface avoids breaking older code.
+    """
+    # Support both 'image_a6' and 'images'
     rgb_dir = image_dir / 'image_a6'
+    if not rgb_dir.exists():
+        alt = image_dir / 'images'
+        if alt.exists():
+            rgb_dir = alt
+
     depth_dir = image_dir / depth_subdir
-    
+
     pairs = []
-    for rgb_file in sorted(rgb_dir.glob('*.jpg')):
-        depth_file = depth_dir / rgb_file.name.replace('.jpg', '.png')
-        if depth_file.exists():
-            pairs.append((rgb_file, depth_file))
-    
+    for ext in ['*.jpg', '*.jpeg', '*.png']:
+        for rgb_file in sorted(rgb_dir.glob(ext)):
+            depth_file = depth_dir / f"{rgb_file.stem}.png"
+            if depth_file.exists():
+                pairs.append((rgb_file, depth_file))
+            else:
+                # Placeholder path (not used in pipeline)
+                pairs.append((rgb_file, depth_file))
     return pairs
 
 

@@ -10,84 +10,13 @@ from pathlib import Path
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
-from matplotlib.colors import LinearSegmentedColormap
 import random
 import shutil
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-
-def create_custom_colormap(min_depth=0.1, max_depth=15.0):
-    """
-    Create custom progressive colormap (red=near, blue=far)
-    Smooth transitions between colors at specified depth ranges.
-    Automatically adjusts to the given min/max depth range.
-    """
-    depth_range = max_depth - min_depth
-    
-    # Define color points in absolute depth values
-    absolute_depth_points = [
-        (0.1,  (1.0, 0.0, 0.0)),    # Pure red
-        (0.3,  (1.0, 0.0, 0.0)),    # Red
-        (0.4,  (1.0, 0.15, 0.0)),   # Red-orange
-        (0.5,  (1.0, 0.35, 0.0)),   # Orange-red
-        (0.6,  (1.0, 0.5, 0.0)),    # Orange
-        (0.8,  (1.0, 0.55, 0.0)),   # Orange
-        (1.0,  (1.0, 0.6, 0.0)),    # Orange
-        (1.1,  (1.0, 0.7, 0.0)),    # Orange-yellow
-        (1.25, (1.0, 0.85, 0.0)),   # Yellow-orange
-        (1.4,  (1.0, 1.0, 0.0)),    # Pure yellow
-        (1.8,  (1.0, 1.0, 0.0)),    # Yellow
-        (2.2,  (0.9, 1.0, 0.0)),    # Yellow
-        (2.4,  (0.7, 1.0, 0.1)),    # Yellow-green
-        (2.5,  (0.5, 1.0, 0.2)),    # Green-yellow
-        (2.7,  (0.3, 1.0, 0.3)),    # Green
-        (3.0,  (0.1, 1.0, 0.4)),    # Green
-        (3.3,  (0.0, 1.0, 0.5)),    # Green-cyan
-        (3.5,  (0.0, 1.0, 0.7)),    # Cyan-green
-        (3.8,  (0.0, 1.0, 0.85)),   # Cyan
-        (4.5,  (0.0, 1.0, 1.0)),    # Pure cyan
-        (5.5,  (0.0, 0.9, 1.0)),    # Cyan
-        (6.5,  (0.0, 0.7, 1.0)),    # Cyan-blue
-        (7.0,  (0.0, 0.5, 1.0)),    # Blue-cyan
-        (8.0,  (0.0, 0.3, 1.0)),    # Blue
-        (10.0, (0.0, 0.15, 1.0)),   # Blue
-        (12.0, (0.0, 0.05, 1.0)),   # Deep blue
-        (15.0, (0.0, 0.0, 1.0)),    # Pure blue
-    ]
-    
-    # Filter and adjust points to fit within [min_depth, max_depth]
-    depth_points = []
-    for d, c in absolute_depth_points:
-        if d >= min_depth and d <= max_depth:
-            depth_points.append((d, c))
-    
-    # Ensure we have start and end points
-    if len(depth_points) == 0 or depth_points[0][0] > min_depth:
-        # Find color for min_depth by interpolation
-        for i, (d, c) in enumerate(absolute_depth_points):
-            if d >= min_depth:
-                depth_points.insert(0, (min_depth, c))
-                break
-    
-    if depth_points[-1][0] < max_depth:
-        depth_points.append((max_depth, absolute_depth_points[-1][1]))
-    
-    # Normalize positions to [0, 1]
-    positions = [(d - min_depth) / depth_range for d, c in depth_points]
-    colors = [c for d, c in depth_points]
-    
-    # Ensure positions start at 0 and end at 1
-    if positions[0] > 0:
-        positions[0] = 0.0
-    if positions[-1] < 1:
-        positions[-1] = 1.0
-    
-    custom_cmap = LinearSegmentedColormap.from_list('depth_custom', 
-                                                     list(zip(positions, colors)), 
-                                                     N=512)
-    return custom_cmap
+from packnet_sfm.visualization.colormaps import create_custom_depth_colormap
 
 
 def apply_mask_with_spacing(mask: np.ndarray, spacing: int = 4) -> np.ndarray:
@@ -329,7 +258,7 @@ def main():
     
     # Colormap
     if args.colormap == 'custom':
-        cmap = create_custom_colormap(args.min_depth, args.max_depth)
+        cmap = create_custom_depth_colormap(args.min_depth, args.max_depth)
     else:
         cmap = getattr(plt.cm, args.colormap)
     

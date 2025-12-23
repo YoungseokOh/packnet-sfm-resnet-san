@@ -551,6 +551,66 @@ def find_sample_pairs(image_dir: Path, depth_subdir: str = 'newest_original_dept
     return pairs
 
 
+def find_rgb_pred_pairs(rgb_dir: Path, pred_depth_dir: Path) -> List[Tuple[Path, Path]]:
+    """Find RGB files and their corresponding predicted depth PNGs.
+
+    Expected predicted depth filenames: depth_<stem>.png where <stem> is RGB stem.
+    Example: RGB 0000000002.jpg -> depth_0000000002.png
+    """
+    if not rgb_dir.exists():
+        print(f"[ERROR] RGB directory not found: {rgb_dir}")
+        return []
+    if not pred_depth_dir.exists():
+        print(f"[ERROR] Pred depth directory not found: {pred_depth_dir}")
+        return []
+
+    pairs: List[Tuple[Path, Path]] = []
+    for ext in ['*.png', '*.jpg', '*.jpeg']:
+        for rgb_file in sorted(rgb_dir.glob(ext)):
+            pred_depth = pred_depth_dir / f"depth_{rgb_file.stem}.png"
+            if pred_depth.exists():
+                pairs.append((rgb_file, pred_depth))
+    print(f"[INFO] Found {len(pairs)} RGB-PredDepth pairs")
+    return pairs
+
+
+def load_pred_depth_png(pred_path: Path) -> np.ndarray:
+    """Load predicted depth from 16-bit PNG.
+
+    Convention in this repo: uint16 PNG saved in (meters * 256).
+    """
+    img = np.array(Image.open(pred_path), dtype=np.uint16)
+    return img.astype(np.float32) / 256.0
+
+
+def visualize_pred_only(
+    rgb: np.ndarray,
+    pred_depth: np.ndarray,
+    min_depth: float,
+    max_depth: float,
+    cmap,
+    sample_name: str
+) -> plt.Figure:
+    """Prediction-only visualization (no GT needed)."""
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5), facecolor='#1a1a1a')
+
+    axes[0].imshow(rgb)
+    axes[0].set_title('RGB Input', color='white', fontsize=13, fontweight='bold')
+    axes[0].axis('off')
+
+    im = axes[1].imshow(pred_depth, cmap=cmap, vmin=min_depth, vmax=max_depth)
+    axes[1].set_title('Pred Depth (Dense)', color='white', fontsize=13, fontweight='bold')
+    axes[1].axis('off')
+    fig.colorbar(im, ax=axes[1], fraction=0.046, pad=0.04, label='Depth (m)')
+
+    for ax in axes.flat:
+        ax.set_facecolor('#1a1a1a')
+
+    fig.suptitle(f'{sample_name}', fontsize=15, color='white', fontweight='bold')
+    plt.tight_layout()
+    return fig
+
+
 # ========== Main ==========
 
 def main():
@@ -615,6 +675,10 @@ Examples:
                         help='Colormap to use')
     parser.add_argument('--depth_subdir', type=str, default='newest_original_depth_maps',
                         help='GT depth subdirectory name')
+
+    # Pred-only mode (use existing predicted depth PNGs)
+    parser.add_argument('--pred_depth_dir', type=str, default=None,
+                        help='If set, skip GT lookup/inference and visualize existing predicted depth PNGs in this directory (expects depth_<stem>.png)')
     
     args = parser.parse_args()
     
@@ -622,16 +686,30 @@ Examples:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Load model
-    model_wrapper, model_max_depth = load_model(args.checkpoint)
-    max_depth = args.max_depth
-    print(f"[INFO] Using max_depth={max_depth}m")
-    
-    # Find samples
-    pairs = find_sample_pairs(Path(args.image_dir), args.depth_subdir)
-    if not pairs:
-        print("[ERROR] No samples found!")
-        return
+    # If pred_depth_dir is provided, do pred-only visualization (no model, no GT)
+    if args.pred_depth_dir is not None:
+        rgb_dir = Path(args.image_dir) / 'images'
+        pred_depth_dir = Path(args.pred_depth_dir)
+        pairs = find_rgb_pred_pairs(rgb_dir, pred_depth_dir)
+        if not pairs:
+            print("[ERROR] No RGB-PredDepth pairs found!")
+            return
+
+        model_wrapper = None
+        model_max_depth = None
+        max_depth = args.max_depth
+        print(f"[INFO] Pred-only mode. Using max_depth={max_depth}m")
+    else:
+        # Load model
+        model_wrapper, model_max_depth = load_model(args.checkpoint)
+        max_depth = args.max_depth
+        print(f"[INFO] Using max_depth={max_depth}m")
+
+        # Find samples (needs GT)
+        pairs = find_sample_pairs(Path(args.image_dir), args.depth_subdir)
+        if not pairs:
+            print("[ERROR] No samples found!")
+            return
     
     # Select samples
     if args.num_samples > 0:
@@ -664,58 +742,75 @@ Examples:
     all_pred_means = []
     all_errors = []
     
-    for idx, (rgb_path, gt_path) in enumerate(pairs):
+    for idx, (rgb_path, second_path) in enumerate(pairs):
         print(f"[{idx+1}/{len(pairs)}] {rgb_path.name}")
-        
-        # Load data
+
+        # Load RGB
         rgb = load_rgb_image(rgb_path)
-        gt_depth = load_gt_depth(gt_path)
-        if gt_depth.shape != (384, 640):
-            gt_depth = cv2.resize(gt_depth, (640, 384), interpolation=cv2.INTER_NEAREST)
-        
-        # Inference
-        pred_depth = run_inference(model_wrapper, rgb_path, max_depth)
+
+        if args.pred_depth_dir is not None:
+            # Pred-only: second_path is predicted depth png
+            pred_depth = load_pred_depth_png(second_path)
+            gt_depth = None
+        else:
+            # GT-based: second_path is GT depth
+            gt_depth = load_gt_depth(second_path)
+            if gt_depth.shape != (384, 640):
+                gt_depth = cv2.resize(gt_depth, (640, 384), interpolation=cv2.INTER_NEAREST)
+
+            # Inference
+            pred_depth = run_inference(model_wrapper, rgb_path, max_depth)
         
         sample_name = rgb_path.stem
         
         # Create visualization based on mode
-        if args.mode == 'sparse':
-            fig = visualize_sparse(
-                rgb, gt_depth, pred_depth,
-                args.min_depth, max_depth,
-                args.clip_percentile, args.subsample_ratio,
-                args.point_size, cmap, sample_name,
-                args.pred_grid_spacing, args.top_margin, args.bottom_margin
-            )
-            suffix = 'sparse'
-        elif args.mode == 'dense':
-            fig = visualize_dense(
-                rgb, gt_depth, pred_depth,
+        if args.pred_depth_dir is not None:
+            # Pred-only path: force dense-like output
+            fig = visualize_pred_only(
+                rgb, pred_depth,
                 args.min_depth, max_depth,
                 cmap, sample_name
             )
-            suffix = 'dense'
-        else:  # comparison
-            fig = visualize_comparison(
-                rgb, gt_depth, pred_depth,
-                args.min_depth, max_depth,
-                cmap, sample_name
-            )
-            suffix = 'comparison'
+            suffix = 'pred_only'
+        else:
+            if args.mode == 'sparse':
+                fig = visualize_sparse(
+                    rgb, gt_depth, pred_depth,
+                    args.min_depth, max_depth,
+                    args.clip_percentile, args.subsample_ratio,
+                    args.point_size, cmap, sample_name,
+                    args.pred_grid_spacing, args.top_margin, args.bottom_margin
+                )
+                suffix = 'sparse'
+            elif args.mode == 'dense':
+                fig = visualize_dense(
+                    rgb, gt_depth, pred_depth,
+                    args.min_depth, max_depth,
+                    cmap, sample_name
+                )
+                suffix = 'dense'
+            else:  # comparison
+                fig = visualize_comparison(
+                    rgb, gt_depth, pred_depth,
+                    args.min_depth, max_depth,
+                    cmap, sample_name
+                )
+                suffix = 'comparison'
         
         # Save
         output_path = output_dir / f'{sample_name}_{suffix}.png'
         fig.savefig(output_path, dpi=150, facecolor=fig.get_facecolor(), bbox_inches='tight')
         plt.close(fig)
         
-        # Collect stats
-        valid_mask = (gt_depth > args.min_depth) & (gt_depth < max_depth)
-        if valid_mask.sum() > 0:
-            gt_mean = gt_depth[valid_mask].mean()
-            pred_mean = pred_depth[valid_mask].mean()
-            all_gt_means.append(gt_mean)
-            all_pred_means.append(pred_mean)
-            all_errors.append(abs(gt_mean - pred_mean))
+        # Collect stats when GT exists
+        if gt_depth is not None:
+            valid_mask = (gt_depth > args.min_depth) & (gt_depth < max_depth)
+            if valid_mask.sum() > 0:
+                gt_mean = gt_depth[valid_mask].mean()
+                pred_mean = pred_depth[valid_mask].mean()
+                all_gt_means.append(gt_mean)
+                all_pred_means.append(pred_mean)
+                all_errors.append(abs(gt_mean - pred_mean))
         
         print(f"    Saved: {output_path.name}")
     
@@ -733,6 +828,8 @@ Examples:
         print(f"Average GT depth: {avg_gt:.2f}m")
         print(f"Average Pred depth: {avg_pred:.2f}m")
         print(f"Average error: {avg_error:.2f}m ({avg_error/avg_gt*100:.1f}%)")
+    else:
+        print("GT not provided (pred-only mode): skipping GT/pred summary statistics")
     print(f"{'='*60}")
 
 
