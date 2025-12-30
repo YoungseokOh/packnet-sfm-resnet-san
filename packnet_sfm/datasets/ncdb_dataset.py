@@ -39,6 +39,7 @@ class NcdbDataset(Dataset):
     # ✅ depth_type → 폴더명 매핑
     DEPTH_TYPE_MAPPING = {
         'distance': 'newest_distance_maps',           # 카메라 중심에서 3D 유클리드 거리
+        'distance_original': 'newest_original_distance_maps',  # 원본 3D 유클리드 거리
         'depth': 'newest_original_depth_maps',        # Z-axis depth (synthetic 없음, 원본)
         'depth_synthetic': 'newest_depth_maps',       # Z-axis depth (synthetic 포함)
     }

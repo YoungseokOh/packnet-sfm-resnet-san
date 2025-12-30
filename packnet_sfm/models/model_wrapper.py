@@ -1072,6 +1072,14 @@ def setup_dataset(config, mode, requirements, **kwargs):
             min_depth = kwargs.get('min_depth', None)
             max_depth = kwargs.get('max_depth', None)
             
+            # ✅ depth_type 가져오기 (config에서 지정된 값 사용)
+            depth_type_list = getattr(config, "depth_type", None)
+            depth_type = depth_type_list[i] if depth_type_list and i < len(depth_type_list) else None
+            
+            # ✅ use_mask 가져오기
+            use_mask_list = getattr(config, "use_mask", None)
+            use_mask = use_mask_list[i] if use_mask_list and i < len(use_mask_list) else False
+            
             dataset = NcdbDataset(
                 config.path[i], 
                 config.split[i],
@@ -1079,6 +1087,8 @@ def setup_dataset(config, mode, requirements, **kwargs):
                 mask_file=getattr(config, "mask_file", [None])[i],
                 min_depth=min_depth,
                 max_depth=max_depth,
+                depth_type=depth_type,
+                use_mask=use_mask,
             )
         # DGP dataset
         elif config.dataset[i] == 'DGP':

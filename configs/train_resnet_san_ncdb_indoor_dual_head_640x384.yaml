@@ -92,13 +92,13 @@ arch:
 ############################################
 
 checkpoint:
-    filepath: 'checkpoints/resnetsan01_dual_head_ncdb_indoor_640x384_0.1_to_10m/'
+    filepath: 'checkpoints/resnetsan01_dual_head_ncdb_indoor_640x384_0.1_to_10m_v2/'
     save_top_k: -1                    # Save all checkpoints (team policy)
     period: 1                         # Save every 2 epochs (disk optimization)
 
 # Save configuration
 save:
-    folder: 'outputs/resnetsan01_dual_head_fixed_ncdb_indoor_640x384_0.1_to_10m/'
+    folder: 'outputs/resnetsan01_dual_head_fixed_ncdb_indoor_640x384_0.1_to_10m_v2/'
 
 # Tensorboard logging
 tensorboard:
