@@ -32,20 +32,88 @@ DEFAULT_LIDAR_TO_WORLD = np.array([
 class NcdbDataset(Dataset):
     """
     NCDB Dataset for Semi-supervised Learning with FisheyeCamera support.
+    
+    Depth Type Naming Convention:
+    ─────────────────────────────────────────────────────────────────────
+    depth_type              →  폴더명                        설명
+    ─────────────────────────────────────────────────────────────────────
+    'depth'                 →  newest_depth_maps            (synthetic 포함)
+    'depth_original'        →  newest_original_depth_maps   (원본 LiDAR만)
+    'distance'              →  newest_distance_maps         (synthetic 포함)
+    'distance_original'     →  newest_original_distance_maps (원본 LiDAR만)
+    ─────────────────────────────────────────────────────────────────────
+    
+    규칙:
+    - '_original' 접미사 없음 → synthetic 데이터 포함
+    - '_original' 접미사 있음 → 원본 LiDAR 데이터만
     """
     # 🔔 해상도 감지 로그: 프로세스당 한 번만 출력
     _RESOLUTION_LOG_SHOWN = False
 
-    # ✅ depth_type → 폴더명 매핑
-    DEPTH_TYPE_MAPPING = {
-        'distance': 'newest_distance_maps',           # 카메라 중심에서 3D 유클리드 거리
-        'distance_original': 'newest_original_distance_maps',  # 원본 3D 유클리드 거리
-        'depth': 'newest_original_depth_maps',        # Z-axis depth (synthetic 없음, 원본)
-        'depth_synthetic': 'newest_depth_maps',       # Z-axis depth (synthetic 포함)
-    }
+    # ✅ 지원하는 depth 베이스 타입 (distance: 3D 유클리드, depth: Z-axis)
+    SUPPORTED_BASE_TYPES = ['distance', 'depth']
     
-    # 기본값: distance (3D 유클리드 거리)
-    DEFAULT_DEPTH_TYPE = 'distance'
+    # 기본값: depth_original (원본 Z-axis depth)
+    DEFAULT_DEPTH_TYPE = 'depth_original'
+
+    @classmethod
+    def resolve_depth_folder(cls, depth_type: str) -> str:
+        """
+        depth_type → 폴더명 변환 (규칙 기반)
+        
+        규칙:
+        - '{base}_original' → 'newest_original_{base}_maps' (원본 LiDAR만)
+        - '{base}'          → 'newest_{base}_maps'          (synthetic 포함)
+        
+        예시:
+        - 'depth_original'    → 'newest_original_depth_maps'
+        - 'depth'             → 'newest_depth_maps'
+        - 'distance_original' → 'newest_original_distance_maps'
+        - 'distance'          → 'newest_distance_maps'
+        
+        Parameters
+        ----------
+        depth_type : str
+            depth 타입 ('depth', 'depth_original', 'distance', 'distance_original')
+        
+        Returns
+        -------
+        str
+            해당하는 폴더명
+        
+        Raises
+        ------
+        ValueError
+            지원하지 않는 depth_type인 경우
+        """
+        depth_type = depth_type.lower().strip()
+        
+        # _original 접미사 확인
+        if depth_type.endswith('_original'):
+            base_type = depth_type.replace('_original', '')
+            if base_type not in cls.SUPPORTED_BASE_TYPES:
+                raise ValueError(
+                    f"[NcdbDataset] Invalid depth_type: '{depth_type}'. "
+                    f"Base type '{base_type}' must be one of: {cls.SUPPORTED_BASE_TYPES}"
+                )
+            return f'newest_original_{base_type}_maps'
+        else:
+            if depth_type not in cls.SUPPORTED_BASE_TYPES:
+                raise ValueError(
+                    f"[NcdbDataset] Invalid depth_type: '{depth_type}'. "
+                    f"Must be one of: {cls.SUPPORTED_BASE_TYPES} "
+                    f"or with '_original' suffix (e.g., 'depth_original', 'distance_original')"
+                )
+            return f'newest_{depth_type}_maps'
+    
+    @classmethod
+    def get_supported_depth_types(cls) -> list:
+        """지원하는 모든 depth_type 목록 반환"""
+        types = []
+        for base in cls.SUPPORTED_BASE_TYPES:
+            types.append(base)              # synthetic 포함 버전
+            types.append(f'{base}_original')  # 원본만 버전
+        return types
 
     # ✅ 공통 PNG 로더: 항상 (미터*256) 규약이면 /256 복원 (default)
     def _load_depth_png(self, depth_path: Path):
@@ -69,8 +137,8 @@ class NcdbDataset(Dataset):
     def __init__(self, dataset_root, split_file, transform=None, mask_file=None,
                  back_context=0, forward_context=0, strides=(1,), 
                  with_context=False, with_depth=True,
-                 depth_type=None,        # ✅ 'distance', 'depth', or 'depth_synthetic' (config에서 설정)
-                 depth_variants=None,    # str | list | None (하위호환용, depth_type 우선)
+                 depth_type=None,        # ✅ 'depth', 'depth_original', 'distance', 'distance_original'
+                 depth_folder=None,      # ✅ 폴더명 직접 지정 (escape hatch)
                  strict_depth=True,      # ⚠️ 기본 True: depth 파일 없으면 예외 발생
                  use_mask: bool = False, # ← 추가: 마스크 사용 여부 (기본 미사용)
                  min_depth: float = None,  # ← GT depth 필터링 최소값
@@ -97,41 +165,32 @@ class NcdbDataset(Dataset):
         self.with_context = with_context or (back_context > 0 or forward_context > 0)
         self.with_depth = with_depth
         
-        # ✅ depth_type 처리 (config에서 설정 가능)
-        # 우선순위: depth_type > 환경변수 > depth_variants > 기본값
+        # ✅ depth_type 처리 (규칙 기반 폴더명 생성)
+        # 우선순위: depth_folder > depth_type > 환경변수 > 기본값
         env_depth_type = os.getenv('NCDB_DEPTH_TYPE', '').strip().lower()
-        env_variant = os.getenv('NCDB_DEPTH_VARIANT', '').strip()
+        env_folder = os.getenv('NCDB_DEPTH_FOLDER', '').strip()
         
-        if depth_type is not None:
-            # config에서 depth_type 지정
-            depth_type = depth_type.lower()
-            if depth_type not in self.DEPTH_TYPE_MAPPING:
-                raise ValueError(f"[NcdbDataset] Invalid depth_type: '{depth_type}'. "
-                               f"Valid options: {list(self.DEPTH_TYPE_MAPPING.keys())}")
-            self.depth_type = depth_type
-            self.depth_variants = [self.DEPTH_TYPE_MAPPING[depth_type]]
+        if depth_folder is not None:
+            # 폴더명 직접 지정 (escape hatch)
+            self.depth_type = None
+            self.depth_variants = [depth_folder]
+            print(f"[NcdbDataset] 📂 depth_folder='{depth_folder}' (직접 지정)")
+        elif depth_type is not None:
+            # config에서 depth_type 지정 → 규칙 기반 폴더명 생성
+            self.depth_type = depth_type.lower()
+            self.depth_variants = [self.resolve_depth_folder(self.depth_type)]
         elif env_depth_type:
             # 환경변수에서 depth_type 지정
-            if env_depth_type not in self.DEPTH_TYPE_MAPPING:
-                raise ValueError(f"[NcdbDataset] Invalid NCDB_DEPTH_TYPE: '{env_depth_type}'. "
-                               f"Valid options: {list(self.DEPTH_TYPE_MAPPING.keys())}")
             self.depth_type = env_depth_type
-            self.depth_variants = [self.DEPTH_TYPE_MAPPING[env_depth_type]]
-        elif env_variant:
+            self.depth_variants = [self.resolve_depth_folder(env_depth_type)]
+        elif env_folder:
             # 환경변수에서 직접 폴더명 지정 (하위호환)
             self.depth_type = None
-            self.depth_variants = [v.strip() for v in env_variant.split(',') if v.strip()]
-        elif depth_variants is not None:
-            # depth_variants 직접 지정 (하위호환)
-            self.depth_type = None
-            if isinstance(depth_variants, str):
-                self.depth_variants = [depth_variants]
-            else:
-                self.depth_variants = list(depth_variants)
+            self.depth_variants = [env_folder]
         else:
             # 기본값 사용
             self.depth_type = self.DEFAULT_DEPTH_TYPE
-            self.depth_variants = [self.DEPTH_TYPE_MAPPING[self.DEFAULT_DEPTH_TYPE]]
+            self.depth_variants = [self.resolve_depth_folder(self.DEFAULT_DEPTH_TYPE)]
         
         self.strict_depth = strict_depth
         
@@ -146,9 +205,11 @@ class NcdbDataset(Dataset):
         
         # ✅ 명확한 로그 출력
         if self.depth_type:
-            print(f"[NcdbDataset] 📊 depth_type='{self.depth_type}' → folder: {self.depth_variants[0]}")
+            is_original = '_original' in self.depth_type
+            data_source = "원본 LiDAR만" if is_original else "synthetic 포함"
+            print(f"[NcdbDataset] 📊 depth_type='{self.depth_type}' → folder: '{self.depth_variants[0]}' ({data_source})")
         else:
-            print(f"[NcdbDataset] Using depth variants (priority order): {self.depth_variants}")
+            print(f"[NcdbDataset] 📂 Using depth folder directly: {self.depth_variants[0]}")
         
         # ✅ dry_run 모드 저장
         self.dry_run = dry_run

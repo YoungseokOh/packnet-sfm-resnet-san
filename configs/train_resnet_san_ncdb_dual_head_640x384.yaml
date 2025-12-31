@@ -57,21 +57,21 @@ datasets:
         dataset: ['ncdb']
         path: ['/workspace/data/ncdb-cls-640x384']
         split: ['splits/combined_train.json']
-        depth_type: ['depth']         # ⭐ 'distance' (3D euclidean) or 'depth' (Z-axis)
+        depth_type: ['depth_original']  # ⭐ 'depth'/'distance' (synthetic포함) or 'depth_original'/'distance_original' (원본만)
         mask_file: ['binary_mask.png']
         use_mask: [false]
     validation:
         dataset: ['ncdb']
         path: ['/workspace/data/ncdb-cls-640x384']
         split: ['splits/combined_val.json']
-        depth_type: ['depth']         # ⭐ 'distance' or 'depth'
+        depth_type: ['depth_original']  # ⭐ 'depth'/'distance' (synthetic포함) or 'depth_original'/'distance_original' (원본만)
         mask_file: ['binary_mask.png']
         use_mask: [false]
     test:
         dataset: ['ncdb']
         path: ['/workspace/data/ncdb-cls-640x384']
         split: ['splits/combined_test.json']
-        depth_type: ['depth']         # ⭐ 'distance' or 'depth'
+        depth_type: ['depth_original']  # ⭐ 'depth'/'distance' (synthetic포함) or 'depth_original'/'distance_original' (원본만)
         mask_file: ['binary_mask.png']
         use_mask: [false]
 

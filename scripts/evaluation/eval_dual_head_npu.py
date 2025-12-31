@@ -38,13 +38,28 @@ from tqdm import tqdm
 from glob import glob
 
 
-# DEPTH_TYPE_MAPPING - same as ncdb_dataset.py
-DEPTH_TYPE_MAPPING = {
-    'distance': 'newest_distance_maps',
-    'depth': 'newest_original_depth_maps',
-    'depth_synthetic': 'newest_depth_maps',
-    'distance_original': 'newest_original_distance_maps',
-}
+# ✅ 규칙 기반 depth_type → 폴더명 변환 (ncdb_dataset.py와 동일한 규칙)
+SUPPORTED_BASE_TYPES = ['distance', 'depth']
+
+def resolve_depth_folder(depth_type: str) -> str:
+    """
+    depth_type → 폴더명 변환 (규칙 기반)
+    
+    규칙:
+    - '{base}_original' → 'newest_original_{base}_maps' (원본 LiDAR만)
+    - '{base}'          → 'newest_{base}_maps'          (synthetic 포함)
+    """
+    depth_type = depth_type.lower().strip()
+    
+    if depth_type.endswith('_original'):
+        base_type = depth_type.replace('_original', '')
+        if base_type not in SUPPORTED_BASE_TYPES:
+            raise ValueError(f"Invalid depth_type: '{depth_type}'. Base type must be one of: {SUPPORTED_BASE_TYPES}")
+        return f'newest_original_{base_type}_maps'
+    else:
+        if depth_type not in SUPPORTED_BASE_TYPES:
+            raise ValueError(f"Invalid depth_type: '{depth_type}'. Must be one of: {SUPPORTED_BASE_TYPES} or with '_original' suffix")
+        return f'newest_{depth_type}_maps'
 
 
 def parse_args():
@@ -63,9 +78,9 @@ def parse_args():
                         help='Min depth for valid region filtering (default: 0.1m)')
     
     # GT type
-    parser.add_argument('--depth_type', type=str, default='depth',
-                        choices=['depth', 'depth_synthetic', 'distance', 'distance_original'],
-                        help='Depth type for GT loading')
+    parser.add_argument('--depth_type', type=str, default='depth_original',
+                        choices=['depth', 'depth_original', 'distance', 'distance_original'],
+                        help='Depth type for GT loading (default: depth_original)')
     
     # GT scaling option
     parser.add_argument('--no_gt_scale', action='store_true',
@@ -241,9 +256,13 @@ def main():
     
     print(f"📂 Found {len(integer_files)} NPY file pairs")
     
-    # GT folder
-    gt_folder = DEPTH_TYPE_MAPPING[args.depth_type]
+    # GT folder - 규칙 기반 변환 사용
+    gt_folder = resolve_depth_folder(args.depth_type)
     gt_dir = os.path.join(args.dataset_path, gt_folder)
+    
+    # depth_type에 따른 데이터 소스 표시
+    data_source = "원본 LiDAR만" if args.depth_type.endswith('_original') else "synthetic 포함"
+    print(f"📊 Depth type: '{args.depth_type}' → {gt_folder} ({data_source})")
     
     if not os.path.exists(gt_dir):
         print(f"❌ GT folder not found: {gt_dir}")
